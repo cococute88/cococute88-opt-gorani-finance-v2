@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -899,6 +900,20 @@ def _ensure_portfolio_state(uid: str):
 
 def _persist(uid: str): save_portfolios(uid, st.session_state["dc_portfolios"])
 
+def _mark_ticker_update_pending() -> None:
+    st.session_state["dc_pending_ticker_update"] = True
+
+
+def _normalize_ticker_inputs(raw: str) -> List[str]:
+    """Split comma/whitespace/newline separated input into unique uppercase tickers."""
+    seen = set()
+    tickers: List[str] = []
+    for ticker in re.split(r"[,\s]+", raw.upper().strip()):
+        if ticker and ticker not in seen:
+            seen.add(ticker)
+            tickers.append(ticker)
+    return tickers
+
 def _render_sidebar_portfolio_manager(uid: str) -> Optional[str]:
     portfolios: Dict[str, List[str]] = st.session_state["dc_portfolios"]
     with st.sidebar:
@@ -928,20 +943,50 @@ def _render_sidebar_portfolio_manager(uid: str) -> Optional[str]:
 def _render_ticker_manager(uid: str, active: str) -> List[str]:
     portfolios = st.session_state["dc_portfolios"]
     current_tickers = list(portfolios.get(active, []))
-    head_cols = st.columns([3, 4, 3])
+    head_cols = st.columns([3, 4, 1.5, 1.5])
     head_cols[0].markdown(f"#### 🎯 Tickers `{active}` <span style='color:var(--text-color); opacity:0.6; font-weight:400; font-size:13px'>({len(current_tickers)}/{MAX_TICKERS_PER_PORTFOLIO})</span>", unsafe_allow_html=True)
+    to_remove = []
     if current_tickers:
         to_remove = head_cols[1].multiselect("삭제할 종목 선택", options=current_tickers, label_visibility="collapsed", placeholder="🗑️ 삭제할 종목...")
         if head_cols[2].button("Remove", use_container_width=True, disabled=not to_remove):
             portfolios[active] = [t for t in current_tickers if t not in to_remove]
-            _persist(uid); st.toast("☁️ 종목 삭제 & 클라우드 저장 완료"); st.rerun()
+            _persist(uid)
+            _mark_ticker_update_pending()
+            st.toast("☁️ 종목 삭제 & 클라우드 저장 완료")
+            st.rerun()
+    else:
+        head_cols[1].caption("등록된 티커가 없습니다.")
+        head_cols[2].button("Remove", use_container_width=True, disabled=True)
+
+    if head_cols[3].button("💾 Save / Update", use_container_width=True, disabled=not current_tickers):
+        st.session_state["dc_pending_ticker_update"] = False
+        st.session_state["dc_run_ticker_update"] = True
+        st.session_state.pop("last_processed_cal_state", None)
+
+    if st.session_state.get("dc_pending_ticker_update"):
+        st.info("티커 변경사항이 저장되었습니다. Save / Update를 누르면 배당 데이터를 최신화합니다.")
+
     with st.form(key=f"dc_add_form_{active}", clear_on_submit=True):
         add_cols = st.columns([4, 1])
-        raw = add_cols[0].text_input("Enter Ticker", placeholder="e.g. OHI, SCHD", label_visibility="collapsed")
+        raw = add_cols[0].text_area("Enter Ticker", placeholder="e.g. OHI, SCHD, JEPI\n또는 OHI SCHD JEPI", label_visibility="collapsed", height=70)
         if add_cols[1].form_submit_button("➕ Add Ticker", use_container_width=True) and raw.strip():
-            ticker = raw.upper().strip()
-            if len(current_tickers) < MAX_TICKERS_PER_PORTFOLIO and ticker not in current_tickers:
-                portfolios[active].append(ticker); _persist(uid); st.toast("☁️ 종목 추가 & 클라우드 저장 완료"); st.rerun()
+            requested_tickers = _normalize_ticker_inputs(raw)
+            existing = set(current_tickers)
+            available_slots = MAX_TICKERS_PER_PORTFOLIO - len(current_tickers)
+            new_tickers = [t for t in requested_tickers if t not in existing]
+            tickers_to_add = new_tickers[:max(0, available_slots)]
+            if tickers_to_add:
+                portfolios[active].extend(tickers_to_add)
+                _persist(uid)
+                _mark_ticker_update_pending()
+                st.toast(f"☁️ {len(tickers_to_add)}개 종목 추가 & 클라우드 저장 완료")
+                if len(new_tickers) > len(tickers_to_add):
+                    st.warning(f"포트폴리오당 최대 {MAX_TICKERS_PER_PORTFOLIO}개까지만 등록할 수 있어 일부 티커는 추가되지 않았습니다.")
+                st.rerun()
+            elif len(current_tickers) >= MAX_TICKERS_PER_PORTFOLIO:
+                st.warning(f"포트폴리오당 최대 {MAX_TICKERS_PER_PORTFOLIO}개까지만 등록할 수 있습니다.")
+            else:
+                st.info("입력한 티커는 이미 포트폴리오에 등록되어 있습니다.")
     
     # -----------------------------------------------------------------------
     # PC/모바일 하이브리드 UI 분기 (CSS에서 클래스명으로 렌더링 제어)
@@ -1016,6 +1061,7 @@ def render() -> None:
     if top_cols[0].button("🔄 일정 최신화", type="primary", use_container_width=True):
         fetch_ticker_bundle.clear()
         st.session_state["force_api_refresh"] = True
+        st.session_state["dc_pending_ticker_update"] = False
         st.session_state.pop("last_processed_cal_state", None) 
         st.session_state["cal_refresh"] = st.session_state.get("cal_refresh", 0) + 1
         st.rerun()
@@ -1042,14 +1088,22 @@ def render() -> None:
         failed = []
         tickers_to_fetch = []
 
+        pending_ticker_update = st.session_state.get("dc_pending_ticker_update", False)
+        run_ticker_update = st.session_state.pop("dc_run_ticker_update", False)
+
         if force_refresh:
             tickers_to_fetch = list(tickers)
         else:
             for t in tickers:
                 if t in all_cached_data and all_cached_data[t]:
                     events.extend([DividendEvent.from_dict(d) for d in all_cached_data[t]])
-                else:
+                elif run_ticker_update or not pending_ticker_update:
                     tickers_to_fetch.append(t)
+
+        if pending_ticker_update and not force_refresh and not run_ticker_update:
+            missing_count = sum(1 for t in tickers if not all_cached_data.get(t))
+            if missing_count:
+                st.info(f"티커 변경사항이 저장되었습니다. Save / Update를 누르면 신규 티커 {missing_count}개의 배당 데이터를 최신화합니다.")
 
         if tickers_to_fetch:
             status_placeholder = st.empty()
@@ -1067,6 +1121,11 @@ def render() -> None:
 
             failed.extend(failed_fetches)
             status_placeholder.empty()
+
+        if run_ticker_update:
+            st.session_state["dc_pending_ticker_update"] = False
+            _persist(uid)
+            st.toast("신규 티커 배당 데이터 최신화 완료", icon="✅")
 
         if force_refresh:
             st.session_state["force_api_refresh"] = False
