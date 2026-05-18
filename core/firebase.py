@@ -2,8 +2,16 @@ import streamlit as st
 import firebase_admin
 from firebase_admin import credentials, db
 
-# 선생님의 Firebase 주소
-BASE_URL = "https://myassettrackergorani-default-rtdb.firebaseio.com"
+def _get_database_url():
+    try:
+        return st.secrets["firebase_app"]["database_url"]
+    except KeyError as exc:
+        raise RuntimeError(
+            "Missing Streamlit secret: [firebase_app].database_url. "
+            "Please set your v2 Firebase Realtime Database URL in secrets.toml."
+        ) from exc
+
+BASE_URL = _get_database_url()
 
 # 파이어베이스 앱이 아직 초기화되지 않았다면 '마스터키'로 초기화 진행
 if not firebase_admin._apps:
