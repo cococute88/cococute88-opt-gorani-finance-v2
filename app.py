@@ -254,8 +254,8 @@ if is_authenticated:
         ]
     }
 
-    render_top_navigation()
     nav = st.navigation(pages, position="hidden")
+    render_top_navigation()
 
     try:
         nav.run()
