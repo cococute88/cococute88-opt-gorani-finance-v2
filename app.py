@@ -12,40 +12,6 @@ from PIL import Image
 
 MAX_FAVORITE_LINKS = 10
 
-TOP_NAV_ITEMS = [
-    ("자산 시뮬레이터", "pages_app/1_asset_simulator.py", "📊"),
-    ("자산 트래커", "pages_app/2_asset_tracker.py", "💰"),
-    ("양도세치기 배당시뮬", "pages_app/3_dividend_sim.py", "💵"),
-    ("매도전환계산기", "pages_app/4_conversion_analysis.py", "🔄"),
-    ("배당 캘린더", "pages_app/5_dividend_calendar.py", "📅"),
-]
-
-
-def render_top_navigation() -> None:
-    st.markdown(
-        """
-        <style>
-        .block-container {
-            padding-top: 0.75rem !important;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    st.markdown(
-        "<div style='font-size:0.9rem;color:#6b7684;font-weight:700;margin-bottom:0.35rem;'>빠른 화면 이동</div>",
-        unsafe_allow_html=True,
-    )
-
-    cols = st.columns(len(TOP_NAV_ITEMS), gap="small")
-    for col, (label, page_path, icon) in zip(cols, TOP_NAV_ITEMS):
-        with col:
-            st.page_link(page_path, label=label, icon=icon, use_container_width=True)
-
-    st.divider()
-
-
 # =========================================================
 # 💡 1. 즐겨찾기 링크 관리 기능 세팅 (팝업 + 표 편집)
 # =========================================================
@@ -175,7 +141,7 @@ st.set_page_config(
     page_title="Gorani finance",
     page_icon=icon_img,
     layout="wide",
-    initial_sidebar_state="expanded" 
+    initial_sidebar_state="collapsed" 
 )
 
 components.html("""
@@ -244,18 +210,15 @@ if is_authenticated:
     
     load_all_data(user_uid)
 
-    pages = {
-        "🧸 자산 및 배당 관리": [
-            st.Page("pages_app/1_asset_simulator.py", title="자산 시뮬레이터", icon="📊"),
-            st.Page("pages_app/2_asset_tracker.py", title="자산 트래커", icon="💰"),
-            st.Page("pages_app/3_dividend_sim.py", title="양도세치기 배당시뮬", icon="💵"),
-            st.Page("pages_app/4_conversion_analysis.py", title="매도전환계산기", icon="🔄"),
-            st.Page("pages_app/5_dividend_calendar.py", title="배당 캘린더", icon="📅", default=True)
-        ]
-    }
+    pages = [
+        st.Page("pages_app/1_asset_simulator.py", title="자산 시뮬레이터", icon="📊"),
+        st.Page("pages_app/2_asset_tracker.py", title="자산 트래커", icon="💰"),
+        st.Page("pages_app/3_dividend_sim.py", title="양도세치기 배당시뮬", icon="💵"),
+        st.Page("pages_app/4_conversion_analysis.py", title="매도전환계산기", icon="🔄"),
+        st.Page("pages_app/5_dividend_calendar.py", title="배당 캘린더", icon="📅", default=True),
+    ]
 
-    nav = st.navigation(pages, position="hidden")
-    render_top_navigation()
+    nav = st.navigation(pages, position="top")
 
     try:
         nav.run()
