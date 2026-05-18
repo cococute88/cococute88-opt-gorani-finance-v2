@@ -1,0 +1,1112 @@
+# modules/dividend_calendar.py
+"""
+GORANI FINANCE - Module 5: Dividend Calendar (Multi-Ticker Portfolio Edition)
+File: modules/dividend_calendar.py
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import time
+import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
+from datetime import date, timedelta
+from typing import Dict, List, Optional, Tuple
+
+import pandas as pd
+import streamlit as st
+import yfinance as yf
+from dateutil.relativedelta import relativedelta
+from pandas.tseries.holiday import USFederalHolidayCalendar
+from streamlit_calendar import calendar
+
+# sync.py 의 강력한 캘린더 저장 함수를 호출
+from core.sync import auto_save_calendar_data
+
+# ---------------------------------------------------------------------------
+# Timezone 설정 (KST 강제 지정 - 스트림릿 클라우드 UTC 문제 해결)
+# ---------------------------------------------------------------------------
+os.environ["TZ"] = "Asia/Seoul"
+if hasattr(time, "tzset"):
+    time.tzset()
+
+# ---------------------------------------------------------------------------
+# API Key Helper (Streamlit Secrets 지원 + 섹션 중첩 방어)
+# ---------------------------------------------------------------------------
+def _get_api_key(key_name: str) -> str:
+    val = os.environ.get(key_name, "")
+    if val: return val
+    try:
+        if hasattr(st, "secrets"):
+            if key_name in st.secrets:
+                return st.secrets[key_name]
+            for section in st.secrets.keys():
+                if isinstance(st.secrets[section], dict) and key_name in st.secrets[section]:
+                    return st.secrets[section][key_name]
+    except Exception:
+        pass
+    return ""
+
+# ---------------------------------------------------------------------------
+# Constants & Config
+# ---------------------------------------------------------------------------
+TAX_RETENTION_RATE = 0.85
+DIVIDEND_TAX_RATE = 0.22
+INVESTMENT_BUDGET = 10_000
+MAX_TICKERS_PER_PORTFOLIO = 80
+
+POLYGON_API_KEY = _get_api_key("POLYGON_API_KEY")
+FINNHUB_API_KEY = _get_api_key("FINNHUB_API_KEY")
+
+# 동시 실행 워커 수 (Polygon 무료 API 사용 시 1로 고정하여 한도 초과 완벽 방지)
+THREAD_WORKERS = 1 if POLYGON_API_KEY else 2  
+
+EVENT_COLORS = {
+    "ex_div":   {"bg": "#3B82F6", "border": "#1D4ED8"},
+    "buy":      {"bg": "#EF4444", "border": "#B91C1C"},
+    "payment":  {"bg": "#10B981", "border": "#047857"},
+    "earnings": {"bg": "#8B5CF6", "border": "#6D28D9"},
+}
+
+EVENT_TYPE_LABEL = {
+    "ex_div":   "Ex-Div Date",
+    "buy":      "Buy Deadline",
+    "payment":  "Payment Date",
+    "earnings": "Earnings Date",
+}
+
+CUSTOM_SYMBOLS = ["없음", "⚠", "※", "ⓔ"]
+
+_US_CAL = USFederalHolidayCalendar()
+_US_HOLIDAYS = _US_CAL.holidays(start='2020-01-01', end='2035-12-31')
+
+
+# ---------------------------------------------------------------------------
+# Trading Day & Pattern Logic
+# ---------------------------------------------------------------------------
+def get_next_trading_day(d: date) -> date:
+    ts = pd.Timestamp(d)
+    while ts.weekday() > 4 or ts in _US_HOLIDAYS:
+        ts += timedelta(days=1)
+    return ts.date()
+
+def get_prev_trading_day(d: date) -> date:
+    ts = pd.Timestamp(d) - timedelta(days=1)
+    while ts.weekday() > 4 or ts in _US_HOLIDAYS:
+        ts -= timedelta(days=1)
+    return ts.date()
+
+def get_pattern_date(base_date: date, target_month_date: date) -> date:
+    weekday = base_date.weekday()
+    nth_week = (base_date.day - 1) // 7 + 1
+    first_day = target_month_date.replace(day=1)
+    offset = (weekday - first_day.weekday()) % 7
+    first_occurrence = first_day + timedelta(days=offset)
+    projected_date = first_occurrence + timedelta(weeks=(nth_week - 1))
+    if projected_date.month != first_day.month:
+        projected_date -= timedelta(weeks=1)
+    return projected_date
+
+
+# ---------------------------------------------------------------------------
+# Auth helper
+# ---------------------------------------------------------------------------
+def _get_user_uid() -> Optional[str]:
+    if "user" in st.session_state and isinstance(st.session_state["user"], dict):
+        return st.session_state["user"].get("uid")
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Persistence layer (Firebase)
+# ---------------------------------------------------------------------------
+def _read_local_store() -> dict:
+    if "div_calendar" not in st.session_state or not isinstance(st.session_state["div_calendar"], dict):
+        st.session_state["div_calendar"] = {}
+    store = st.session_state["div_calendar"]
+    store.setdefault("portfolios", {})
+    store.setdefault("memos", {})
+    store.setdefault("marks", {})
+    store.setdefault("custom_ce", {})
+    store.setdefault("cached_events", {})  # API 캐싱 데이터 저장공간 추가
+    return store
+
+def _write_local_store(data: dict) -> None:
+    st.session_state["div_calendar"] = data
+
+def _push_cloud(silent: bool = True) -> bool:
+    try:
+        return auto_save_calendar_data(silent=silent)
+    except Exception as e:
+        st.session_state["div_calendar_last_error"] = f"push_cloud: {e}"
+        if not silent:
+            st.error(f"❌ 자동 저장 실패: {e}")
+        return False
+
+def load_portfolios(user_uid: str) -> Dict[str, List[str]]:
+    raw_pfs = _read_local_store().get("portfolios", {}) or {}
+    clean_pfs: Dict[str, List[str]] = {}
+    for k, v in raw_pfs.items():
+        if k == "_EMPTY_PF_": continue
+        if isinstance(v, list): clean_pfs[k] = [t for t in v if t and t != "_EMPTY_"]
+        elif isinstance(v, dict):
+            try: clean_pfs[k] = [t for _, t in sorted(v.items(), key=lambda x: int(x[0]) if str(x[0]).isdigit() else 0) if t and t != "_EMPTY_"]
+            except Exception: clean_pfs[k] = [t for t in v.values() if t and t != "_EMPTY_"]
+        else: clean_pfs[k] = []
+    return clean_pfs
+
+def save_portfolios(user_uid: str, portfolios: Dict[str, List[str]]):
+    store = _read_local_store(); store["portfolios"] = portfolios; _write_local_store(store); _push_cloud(silent=True)
+
+def load_memos(user_uid: str) -> Dict[str, str]:
+    return {k: v for k, v in (_read_local_store().get("memos", {}) or {}).items() if k != "_EMPTY_DICT_"}
+
+def save_memos(user_uid: str, memos: Dict[str, str]):
+    store = _read_local_store(); store["memos"] = memos; _write_local_store(store); _push_cloud(silent=True)
+
+def load_marks(user_uid: str) -> Dict[str, Dict[str, bool]]:
+    return {k: v for k, v in (_read_local_store().get("marks", {}) or {}).items() if k != "_EMPTY_DICT_"}
+
+def save_marks(user_uid: str, marks: Dict[str, Dict[str, bool]]):
+    store = _read_local_store(); store["marks"] = marks; _write_local_store(store); _push_cloud(silent=True)
+
+def load_custom_events(user_uid: str) -> Dict[str, Dict[str, str]]:
+    return {k: v for k, v in (_read_local_store().get("custom_ce", {}) or {}).items() if k != "_EMPTY_DICT_"}
+
+def save_custom_events(user_uid: str, ce_data: Dict[str, Dict[str, str]]):
+    store = _read_local_store(); store["custom_ce"] = ce_data; _write_local_store(store); _push_cloud(silent=True)
+
+def load_cached_events(user_uid: str) -> Dict[str, List[dict]]:
+    return _read_local_store().get("cached_events", {})
+
+def save_cached_events(user_uid: str, ce_data: Dict[str, List[dict]]):
+    store = _read_local_store(); store["cached_events"] = ce_data; _write_local_store(store); _push_cloud(silent=True)
+
+def _migrate_custom_symbols(uid: str) -> None:
+    """기존의 'ⓕ'와 'ⓒ' 심볼을 새로운 '⚠'와 '※' 심볼로 마이그레이션합니다."""
+    ce_data = load_custom_events(uid)
+    changed = False
+    for date_str, c_data in ce_data.items():
+        sym = c_data.get("symbol")
+        if sym == "ⓕ":
+            c_data["symbol"] = "⚠"
+            changed = True
+        elif sym == "ⓒ":
+            c_data["symbol"] = "※"
+            changed = True
+    if changed:
+        save_custom_events(uid, ce_data)
+
+
+# ---------------------------------------------------------------------------
+# Data classes
+# ---------------------------------------------------------------------------
+@dataclass
+class DividendEvent:
+    ticker: str
+    event_type: str
+    event_date: date
+    ex_div_date: date
+    buy_deadline: date
+    payment_date: date
+    dividend_amount: float
+    current_price: float
+    annual_yield: float
+    estimated: bool
+    is_etf: bool = False
+
+    @property
+    def event_id(self) -> str: return f"{self.ticker}-{self.event_type}-{self.event_date.isoformat()}"
+
+    def title(self, marks: dict) -> str:
+        if self.event_type == "earnings": base_title = f"{self.ticker} · Earnings"
+        else:
+            label = {"ex_div": "Ex-Div", "buy": "Buy By", "payment": "Pay"}[self.event_type]
+            shares = int(INVESTMENT_BUDGET / self.current_price) if self.current_price > 0 else 0
+            tax_savings = shares * self.dividend_amount * TAX_RETENTION_RATE * DIVIDEND_TAX_RATE
+            base_title = f"{self.ticker} · {label} · ${tax_savings:.2f}"
+        evt_marks = marks.get(self.event_id, {})
+        star_icon = "⭐" if evt_marks.get("star") else ""
+        heart_icon = "💗" if evt_marks.get("heart") else ""
+        prefix = f"{star_icon}{heart_icon}"
+        if prefix: return f"{prefix} {base_title}"
+        return base_title
+
+    def to_fc_event(self, marks: dict) -> dict:
+        c = EVENT_COLORS[self.event_type]
+        is_past = self.event_date < date.today()
+        
+        class_names = []
+        if is_past: 
+            class_names.append("past-event")
+        if self.estimated: 
+            class_names.append("estimated-event")
+            
+        return {
+            "id": self.event_id, "title": self.title(marks),
+            "start": self.event_date.isoformat(), "end": self.event_date.isoformat(),
+            "allDay": True, "backgroundColor": c["bg"], "borderColor": c["border"],
+            "textColor": "#FFFFFF", "classNames": class_names,
+            "extendedProps": {
+                "event_id": self.event_id, "ticker": self.ticker, "event_type": self.event_type,
+                "event_date": self.event_date.isoformat(), "ex_div_date": self.ex_div_date.isoformat(),
+                "buy_deadline": self.buy_deadline.isoformat(), "payment_date": self.payment_date.isoformat(),
+                "dividend_amount": self.dividend_amount, "current_price": self.current_price,
+                "annual_yield": self.annual_yield, "estimated": self.estimated,
+            },
+        }
+
+    def to_dict(self) -> dict:
+        return {
+            "ticker": self.ticker, "event_type": self.event_type,
+            "event_date": self.event_date.isoformat(),
+            "ex_div_date": self.ex_div_date.isoformat(),
+            "buy_deadline": self.buy_deadline.isoformat(),
+            "payment_date": self.payment_date.isoformat(),
+            "dividend_amount": self.dividend_amount,
+            "current_price": self.current_price,
+            "annual_yield": self.annual_yield,
+            "estimated": self.estimated, "is_etf": self.is_etf
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> 'DividendEvent':
+        return cls(
+            ticker=d["ticker"], event_type=d["event_type"],
+            event_date=date.fromisoformat(d["event_date"]),
+            ex_div_date=date.fromisoformat(d["ex_div_date"]),
+            buy_deadline=date.fromisoformat(d["buy_deadline"]),
+            payment_date=date.fromisoformat(d["payment_date"]),
+            dividend_amount=d["dividend_amount"],
+            current_price=d["current_price"],
+            annual_yield=d["annual_yield"],
+            estimated=d["estimated"], is_etf=d.get("is_etf", False)
+        )
+
+
+# ---------------------------------------------------------------------------
+# API Request Helper (Rate Limiting 방어 로직 강화)
+# ---------------------------------------------------------------------------
+def _safe_request(url: str, retries: int = 4) -> Optional[requests.Response]:
+    for attempt in range(retries):
+        try:
+            resp = requests.get(url, timeout=5)
+            if resp.status_code == 429:
+                # 429 에러 발생 시: Polygon은 한도가 타이트하므로 1분 대기, 나머지는 15초 대기
+                wait_time = 62 if "polygon.io" in url else 15
+                time.sleep(wait_time)
+                continue
+            return resp
+        except requests.exceptions.RequestException:
+            time.sleep(2)
+    return None
+
+
+# ---------------------------------------------------------------------------
+# yfinance / Polygon.io / Finnhub access
+# ---------------------------------------------------------------------------
+@st.cache_data(show_spinner=False, ttl=60 * 60)
+def fetch_ticker_bundle(ticker: str) -> Optional[dict]:
+    try:
+        tk = yf.Ticker(ticker)
+        price = None
+        try: price = float(tk.fast_info.get("last_price"))
+        except Exception: pass
+        if not price or price <= 0:
+            hist = tk.history(period="5d")
+            if not hist.empty: price = float(hist["Close"].iloc[-1])
+        if not price or price <= 0: return None
+
+        info = {}
+        try: info = tk.info or {}
+        except Exception: info = {}
+
+        earnings_date = None
+        try:
+            for key in ["earningsTimestamp", "earningsTimestampStart", "nextEarningsDate"]:
+                ts = info.get(key)
+                if ts:
+                    try: d = pd.to_datetime(ts, unit='s', utc=True).tz_convert('US/Eastern').date()
+                    except Exception: d = date.fromtimestamp(ts)
+                    # 실적 발표일도 주말 회피 적용
+                    ed = get_next_trading_day(d)
+                    if ed >= date.today():
+                        earnings_date = ed
+                        break
+        except Exception: pass
+
+        if not earnings_date and FINNHUB_API_KEY:
+            try:
+                today_str = date.today().strftime("%Y-%m-%d")
+                future_str = (date.today() + timedelta(days=120)).strftime("%Y-%m-%d")
+                url = f"https://finnhub.io/api/v1/calendar/earnings?symbol={ticker}&from={today_str}&to={future_str}&token={FINNHUB_API_KEY}"
+                resp = _safe_request(url)
+                if resp and resp.status_code == 200:
+                    for e in resp.json().get("earningsCalendar", []):
+                        ed_str = e.get("date")
+                        if ed_str:
+                            ed_raw = date.fromisoformat(ed_str)
+                            ed = get_next_trading_day(ed_raw)
+                            if ed >= date.today():
+                                earnings_date = ed
+                                break
+            except Exception: pass
+
+        declared_dict = {}
+
+        try:
+            yf_divs = tk.dividends
+            if yf_divs is not None and not yf_divs.empty:
+                yf_divs.index = pd.to_datetime(yf_divs.index).tz_localize(None)
+                for ex_ts, amt in yf_divs.items():
+                    # 안전장치: yfinance의 ex_date 도 주말 회피
+                    d = get_next_trading_day(ex_ts.date())
+                    if d.year >= 2020:
+                        declared_dict[d] = {
+                            "ex_date": d,
+                            "pay_date": get_next_trading_day(d + timedelta(days=14)),
+                            "amount": float(amt),
+                            "is_est": False
+                        }
+        except Exception: pass
+
+        if FINNHUB_API_KEY:
+            try:
+                start_str = (date.today() - timedelta(days=180)).strftime("%Y-%m-%d")
+                end_str = (date.today() + timedelta(days=120)).strftime("%Y-%m-%d")
+                url = f"https://finnhub.io/api/v1/stock/dividend?symbol={ticker}&from={start_str}&to={end_str}&token={FINNHUB_API_KEY}"
+                resp = _safe_request(url)
+                if resp and resp.status_code == 200:
+                    data = resp.json()
+                    if isinstance(data, list):
+                        for item in data:
+                            ex_d_str = item.get("date") or item.get("exDate")
+                            if ex_d_str:
+                                # 안전장치: API 데이터 무조건 검증
+                                ex_d_raw = date.fromisoformat(ex_d_str[:10])
+                                ex_d = get_next_trading_day(ex_d_raw)
+                                
+                                pay_d_str = item.get("payDate")
+                                pay_d_raw = date.fromisoformat(pay_d_str[:10]) if pay_d_str else (ex_d + timedelta(days=14))
+                                pay_d = get_next_trading_day(pay_d_raw) # 주말/공휴일 완벽 회피
+                                
+                                amt = float(item.get("amount", item.get("dividend", 0.0)))
+                                
+                                if amt > 0 or ex_d not in declared_dict:
+                                    declared_dict[ex_d] = {"ex_date": ex_d, "pay_date": pay_d, "amount": amt if amt > 0 else declared_dict.get(ex_d, {}).get("amount", 0.0), "is_est": False}
+            except Exception: pass
+
+        if POLYGON_API_KEY:
+            try:
+                url = f"https://api.polygon.io/v3/reference/dividends?ticker={ticker}&apiKey={POLYGON_API_KEY}&limit=20&sort=ex_dividend_date&order=desc"
+                resp = _safe_request(url)
+                if resp and resp.status_code == 200:
+                    for item in resp.json().get("results", []):
+                        # 안전장치: API 데이터 무조건 검증
+                        ex_d_raw = date.fromisoformat(item["ex_dividend_date"])
+                        ex_d = get_next_trading_day(ex_d_raw)
+                        
+                        pay_d_str = item.get("pay_date")
+                        pay_d_raw = date.fromisoformat(pay_d_str) if pay_d_str else (ex_d + timedelta(days=14))
+                        pay_d = get_next_trading_day(pay_d_raw) # 주말/공휴일 완벽 회피
+                        
+                        amt = float(item["cash_amount"])
+                        declared_dict[ex_d] = {"ex_date": ex_d, "pay_date": pay_d, "amount": amt, "is_est": False}
+            except Exception: pass
+
+        try:
+            for key in ["exDividendDate", "lastDividendDate"]:
+                nx = info.get(key)
+                if nx:
+                    try: nx_date_raw = pd.to_datetime(nx, unit='s', utc=True).tz_convert('US/Eastern').date()
+                    except Exception: nx_date_raw = date.fromtimestamp(nx)
+                    
+                    nx_date = get_next_trading_day(nx_date_raw) # 안전장치 추가
+                    
+                    if nx_date not in declared_dict and nx_date >= (date.today() - timedelta(days=30)):
+                        amt_raw = info.get("dividendRate")
+                        amt = float(amt_raw) if amt_raw is not None else 0.0 
+                        if amt > 0:
+                            periods = 4
+                            if declared_dict:
+                                tmp_series = pd.Series([x["amount"] for x in declared_dict.values()], index=[x["ex_date"] for x in declared_dict.values()])
+                                if len(tmp_series) >= 2:
+                                    deltas = tmp_series.index.to_series().diff().dropna().dt.days
+                                    med_days = float(deltas.median())
+                                    if med_days <= 45: periods = 12
+                                    elif med_days <= 120: periods = 4
+                                    elif med_days <= 210: periods = 2
+                                    else: periods = 1
+                            amt = amt / max(1, periods)
+                        else:
+                            amt = list(declared_dict.values())[-1]["amount"] if declared_dict else 0.0
+                            
+                        declared_dict[nx_date] = {
+                            "ex_date": nx_date,
+                            "pay_date": get_next_trading_day(nx_date + timedelta(days=14)),
+                            "amount": float(amt),
+                            "is_est": False  # 요약 페이지 데이터도 공식이므로 확정(False) 처리
+                        }
+        except Exception: pass
+
+        if not declared_dict: return None
+
+        declared_events = sorted(list(declared_dict.values()), key=lambda x: x["ex_date"])
+        divs_series = pd.Series(
+            [e["amount"] for e in declared_events],
+            index=[pd.Timestamp(e["ex_date"]) for e in declared_events]
+        )
+
+        return {
+            "dividends": divs_series,
+            "declared_events": declared_events,
+            "info": info,
+            "current_price": price,
+            "earnings_date": earnings_date
+        }
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Frequency inference + projection
+# ---------------------------------------------------------------------------
+def infer_frequency_months(dividends: pd.Series) -> int:
+    recent = dividends.tail(8)
+    if len(recent) < 2: return 3
+    deltas_days = recent.index.to_series().diff().dropna().dt.days
+    median_days = float(deltas_days.median())
+    if median_days <= 45: return 1
+    if median_days <= 120: return 3
+    if median_days <= 210: return 6
+    return 12
+
+
+def project_future_dividends(ticker: str, bundle: dict) -> List[DividendEvent]:
+    divs: pd.Series = bundle["dividends"]
+    declared_events = bundle.get("declared_events", [])
+    price: float = bundle["current_price"]
+
+    freq_months = infer_frequency_months(divs)
+    last_ex_div = divs.index[-1].date()
+    last_amount = float(divs.iloc[-1])
+
+    payments_per_year = max(1, 12 // freq_months)
+    annual_dividend = last_amount * payments_per_year
+    annual_yield = (annual_dividend / price) * 100 if price else 0.0
+
+    payment_offset_days = 14
+    events: List[DividendEvent] = []
+
+    is_etf = bundle.get("info", {}).get("quoteType", "") == "ETF"
+
+    start_date = date(2026, 1, 1)
+    today = date.today()
+    horizon = today + relativedelta(years=1)
+
+    if bundle.get("earnings_date"):
+        ed = bundle["earnings_date"]
+        events.append(DividendEvent(ticker=ticker, event_type="earnings", event_date=ed, ex_div_date=ed, buy_deadline=ed, payment_date=ed, dividend_amount=0.0, current_price=price, annual_yield=annual_yield, estimated=False, is_etf=is_etf))
+    else:
+        dummy_date = date(2999, 12, 31)
+        events.append(DividendEvent(ticker=ticker, event_type="earnings", event_date=dummy_date, ex_div_date=dummy_date, buy_deadline=dummy_date, payment_date=dummy_date, dividend_amount=0.0, current_price=price, annual_yield=annual_yield, estimated=True, is_etf=is_etf))
+
+    known_ex_dates = set()
+
+    for e in declared_events:
+        ex_d = e["ex_date"]
+        if ex_d >= start_date:
+            buy_deadline = get_prev_trading_day(ex_d)
+            payment = e["pay_date"]
+            amt = e["amount"]
+            is_est = e.get("is_est", False) 
+            
+            common = dict(ticker=ticker, ex_div_date=ex_d, buy_deadline=buy_deadline, payment_date=payment, dividend_amount=float(amt), current_price=price, annual_yield=annual_yield, estimated=is_est, is_etf=is_etf)
+            events.append(DividendEvent(event_type="ex_div", event_date=ex_d, **common))
+            events.append(DividendEvent(event_type="buy", event_date=buy_deadline, **common))
+            events.append(DividendEvent(event_type="payment", event_date=payment, **common))
+            known_ex_dates.add(ex_d)
+
+    current_target = last_ex_div + relativedelta(months=freq_months)
+    current_target = get_pattern_date(last_ex_div, current_target)
+
+    while current_target <= horizon:
+        is_duplicate = False
+        for k_ex in known_ex_dates:
+            if abs((k_ex - current_target).days) < 20:
+                is_duplicate = True
+                break
+                
+        if not is_duplicate and current_target > last_ex_div:
+            ex_div = get_next_trading_day(current_target)
+            buy_deadline = get_prev_trading_day(ex_div)
+            pay_target = current_target + timedelta(days=payment_offset_days)
+            payment = get_next_trading_day(pay_target)
+
+            common = dict(ticker=ticker, ex_div_date=ex_div, buy_deadline=buy_deadline, payment_date=payment, dividend_amount=last_amount, current_price=price, annual_yield=annual_yield, estimated=True, is_etf=is_etf)
+            events.append(DividendEvent(event_type="ex_div",  event_date=ex_div,        **common))
+            events.append(DividendEvent(event_type="buy",     event_date=buy_deadline,  **common))
+            events.append(DividendEvent(event_type="payment", event_date=payment,       **common))
+
+        temp_month = current_target + relativedelta(months=freq_months)
+        current_target = get_pattern_date(last_ex_div, temp_month)
+
+    final_events = []
+    for e in events:
+        if e.event_date.year == 2999 or (start_date <= e.event_date <= horizon):
+            final_events.append(e)
+
+    return final_events
+
+def batch_project_events(tickers: Tuple[str, ...], placeholder=None) -> Tuple[List[DividendEvent], List[str]]:
+    all_events: List[DividendEvent] = []
+    failed: List[str] = []
+    if not tickers: return all_events, failed
+
+    # Polygon API 5회/1분 한도를 완벽히 지키기 위한 딜레이 설정
+    # (12.5초 대기 시 1분에 4.8회 요청하게 되어 무료 티어 한도를 절대 넘지 않음)
+    delay_seconds = 12.5 if POLYGON_API_KEY else 1.5
+
+    def _job(t: str):
+        time.sleep(delay_seconds) 
+        bundle = fetch_ticker_bundle(t)
+        if bundle is None: return t, None
+        try: return t, project_future_dividends(t, bundle)
+        except Exception: return t, None
+
+    completed = 0
+    total = len(tickers)
+    
+    with ThreadPoolExecutor(max_workers=THREAD_WORKERS) as ex:
+        futures = {ex.submit(_job, t): t for t in tickers}
+        for fut in as_completed(futures):
+            t, evts = fut.result()
+            completed += 1
+            if placeholder:
+                # 남은 시간을 계산하여 사용자에게 진행 상황과 ETA를 안내
+                eta_mins = int((total - completed) * delay_seconds / 60)
+                eta_str = f"남은 시간 약 {eta_mins}분" if eta_mins > 0 else "거의 완료됨"
+                placeholder.info(f"🔄 최신 데이터 수집 중... ({completed}/{total}) ⏳\n\n(Polygon API 무료 한도 준수를 위해 1종목당 12.5초 대기 중입니다. {eta_str})")
+                
+            if evts is None or not evts: failed.append(t)
+            else: all_events.extend(evts)
+
+    return all_events, failed
+
+
+# ---------------------------------------------------------------------------
+# Calculations
+# ---------------------------------------------------------------------------
+def calc_tax_savings(current_price: float, dividend_amount: float) -> Tuple[int, float]:
+    if current_price <= 0: return 0, 0.0
+    shares = int(INVESTMENT_BUDGET / current_price)
+    savings = shares * dividend_amount * TAX_RETENTION_RATE * DIVIDEND_TAX_RATE
+    return shares, savings
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def get_historical_tax_saving(ticker: str) -> float:
+    try:
+        tk = yf.Ticker(ticker)
+        df = tk.history(period="5y", auto_adjust=False)
+        if df.empty: return 0.0
+        df.index = df.index.tz_localize(None).normalize()
+        if 'Dividends' not in df.columns: return 0.0
+        divs = df[df['Dividends'] > 0]['Dividends']
+        if divs.empty: return 0.0
+        success_profits = []
+        for ex_date, div_amount in divs.items():
+            try: idx = df.index.get_loc(ex_date)
+            except KeyError: continue
+            if idx < 1: continue
+            buy_price = df.iloc[idx-1]['Close']
+            after_tax_div = div_amount * TAX_RETENTION_RATE
+            bep = buy_price - after_tax_div
+            max_high = df.iloc[idx]['High']
+            if max_high >= bep:
+                profit_pct = (after_tax_div / buy_price) * 100
+                success_profits.append(profit_pct)
+        if not success_profits: return 0.0
+        avg_profit = sum(success_profits) / len(success_profits)
+        tax_saving = (avg_profit / 100) * INVESTMENT_BUDGET * DIVIDEND_TAX_RATE
+        return tax_saving
+    except Exception: return 0.0
+
+
+# ---------------------------------------------------------------------------
+# UI helpers / Dialog Wrappers
+# ---------------------------------------------------------------------------
+def dialog_wrapper(title):
+    if hasattr(st, "dialog"): return st.dialog(title)
+    elif hasattr(st, "experimental_dialog"): return st.experimental_dialog(title)
+    else:
+        def decorator(func):
+            def wrapper(*args, **kwargs):
+                st.warning(f"👇 **{title}** 창이 달력 맨 아래에 열렸습니다! 스크롤을 내려주세요.")
+                with st.container():
+                    st.markdown(f"### {title}")
+                    return func(*args, **kwargs)
+            return wrapper
+        return decorator
+
+def _inject_theme_css() -> None:
+    st.markdown(
+        """
+        <style>
+            .gorani-card { background-color: var(--secondary-background-color); border: 1px solid rgba(128, 128, 128, 0.2); border-radius: 12px; padding: 16px 20px; margin-bottom: 12px; color: var(--text-color); }
+            .gorani-kv { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px dashed rgba(128, 128, 128, 0.3); }
+            .gorani-kv:last-child { border-bottom: none; }
+            .gorani-kv .k { color: var(--text-color); opacity: 0.7; }
+            .gorani-kv .v { color: var(--text-color); font-weight: 600; }
+            .gorani-pill { display: inline-block; padding: 4px 10px; margin: 3px; background: var(--secondary-background-color); color: var(--text-color); border-radius: 999px; font-size: 12px; border: 1px solid rgba(128, 128, 128, 0.2); }
+            div[data-testid="stCalendarContainer"] { background: var(--background-color); border-radius:12px; }
+            div[data-testid="stDialogContent"] > div:first-child > div[data-testid="stHorizontalBlock"] { display: flex !important; flex-wrap: nowrap !important; align-items: center !important; justify-content: space-between !important; }
+            div[data-testid="stDialog"] button[kind="tertiary"] { padding: 0px !important; font-size: 1.6rem !important; height: 40px !important; width: 40px !important; }
+            
+            /* 반응형 레이아웃 분기 처리 (안전한 :not 조건 적용) */
+            @media screen and (min-width: 769px) {
+                /* 데스크톱: 모바일 전용 컨테이너만 정확히 지정해서 숨김 */
+                div[data-testid="stVerticalBlock"]:has(.mobile-marker):not(:has(.desktop-marker)) { 
+                    display: none !important; 
+                }
+            }
+            @media screen and (max-width: 768px) {
+                /* 모바일: 데스크톱 전용 컨테이너만 정확히 지정해서 숨김 */
+                div[data-testid="stVerticalBlock"]:has(.desktop-marker):not(:has(.mobile-marker)) { 
+                    display: none !important; 
+                }
+            }
+        </style>
+        """, unsafe_allow_html=True
+    )
+
+def _calendar_options() -> dict:
+    return {
+        "locale": "ko",
+        "editable": False,
+        "selectable": True,
+        "unselectAuto": True,
+        "headerToolbar": {"left": "", "center": "title", "right": "dayGridMonth,listMonth"},
+        "initialView": "dayGridMonth",
+        "height": 720,
+        "eventDisplay": "block",
+        "displayEventTime": False,
+        "fixedWeekCount": True,
+        "buttonText": {"month": "월간", "list": "목록"},
+        "dayCellFormat": {"day": "numeric"},
+        "views": {
+            "dayGridMonth": {"dayCellFormat": {"day": "numeric"}},
+            "listMonth": {"listDayFormat": {"year": "numeric", "month": "2-digit", "day": "2-digit"}, "listDayAltFormat": False},
+        },
+    }
+
+def _calendar_custom_css(ce_css: str = "") -> str:
+    base_css = """
+        .fc { background-color: var(--background-color); color: var(--text-color); }
+        .fc .fc-button { background: var(--secondary-background-color); border: 1px solid rgba(128, 128, 128, 0.3); color: var(--text-color); text-transform: capitalize; }
+        .fc .fc-button-primary:not(:disabled).fc-button-active { background: var(--primary-color); border-color: var(--primary-color); color: #ffffff; }
+        .fc-theme-standard td, .fc-theme-standard th { border-color: rgba(128, 128, 128, 0.2); }
+        .fc-day-today { background: rgba(128, 128, 128, 0.1) !important; }
+        .fc-daygrid-event { border-radius: 4px; padding: 2px 4px; font-size: 11px; cursor: pointer; color: #ffffff !important; border: none; }
+        .past-event { opacity: 0.8 !important; filter: grayscale(30%) !important; }
+        .estimated-event { opacity: 0.6 !important; }
+        .fc-daygrid-day { cursor: pointer; }
+        .fc-daygrid-day-frame { cursor: pointer; min-height: 90px; }
+        .fc-daygrid-day-top { display: flex !important; flex-direction: row !important; justify-content: space-between !important; align-items: center !important; width: 100%; padding: 2px 6px; box-sizing: border-box; min-height: 22px; cursor: pointer !important; }
+        .fc-daygrid-day-number { color: transparent !important; text-decoration: none !important; padding: 2px 4px !important; cursor: pointer !important; flex-shrink: 0; text-align: right; position: relative; min-width: 22px; font-size: 14px; margin-left: auto !important; }
+        .fc-daygrid-day-number::after { color: var(--text-color); font-size: 14px; position: absolute; right: 4px; top: 50%; transform: translateY(-50%); pointer-events: none; }
+    """
+    day_css = "".join([f'.fc-daygrid-day[data-date$="-{i:02d}"] .fc-daygrid-day-number::after {{ content: "{i}"; }}\n' for i in range(1, 32)])
+    return base_css + day_css + ce_css
+
+def _events_to_dataframe(events: List[DividendEvent]) -> pd.DataFrame:
+    if not events: return pd.DataFrame(columns=["Type", "Date", "Status", "Ticker", "Dividend", "Ex-Div", "Buy By", "Payment"])
+    data = []
+    for e in events:
+        row = {"Type": e.event_type, "Ticker": e.ticker}
+        if e.event_type == "earnings":
+            if e.event_date.year == 2999: row.update({"Date": "-", "Status": "missing(ETF)" if e.is_etf else "missing", "Dividend": "-", "Ex-Div": "-", "Buy By": "-", "Payment": "-"})
+            else: row.update({"Date": e.event_date.strftime("%Y-%m-%d"), "Status": "EST" if e.estimated else "DCL", "Dividend": "-", "Ex-Div": "-", "Buy By": "-", "Payment": "-"})
+        else: row.update({"Date": e.event_date.strftime("%Y-%m-%d"), "Status": "EST" if e.estimated else "DCL", "Dividend": f"${round(e.dividend_amount, 4)}", "Ex-Div": e.ex_div_date.strftime("%Y-%m-%d"), "Buy By": e.buy_deadline.strftime("%Y-%m-%d"), "Payment": e.payment_date.strftime("%Y-%m-%d")})
+        data.append(row)
+    df = pd.DataFrame(data)
+    df['_sort_date'] = df['Date'].replace("-", "9999-12-31")
+    return df.sort_values("_sort_date").drop(columns=["_sort_date"]).reset_index(drop=True)
+
+
+# ---------------------------------------------------------------------------
+# 날짜 파싱 및 안전한 클릭 처리
+# ---------------------------------------------------------------------------
+def _extract_date_str(val: str) -> Optional[str]:
+    if not val: return None
+    val = str(val)
+    if "T" in val:
+        try:
+            dt = pd.to_datetime(val)
+            if dt.tz is not None: dt = dt.tz_convert("Asia/Seoul")
+            return dt.strftime("%Y-%m-%d")
+        except Exception: return val[:10]
+    return val[:10]
+
+def _parse_calendar_state(cal_state) -> Tuple[Optional[dict], Optional[str]]:
+    if not isinstance(cal_state, dict) or not cal_state: return None, None
+    cb = cal_state.get("callback", "")
+    if cb == "eventClick" or "eventClick" in cal_state:
+        ev = (cal_state.get("eventClick") or {}).get("event") or {}
+        if ev: return ev, None
+    if cb == "dateClick" or "dateClick" in cal_state:
+        dc = cal_state.get("dateClick") or {}
+        val = dc.get("date") or dc.get("dateStr")
+        if val: return None, _extract_date_str(val)
+    if cb == "select" or "select" in cal_state:
+        sc = cal_state.get("select") or {}
+        val = sc.get("start") or sc.get("startStr")
+        if val: return None, _extract_date_str(val)
+    return None, None
+
+
+# ---------------------------------------------------------------------------
+# Dialog Handlers
+# ---------------------------------------------------------------------------
+@dialog_wrapper("📅 커스텀 일정 등록")
+def show_date_dialog(date_str: str, uid: str, refresh_tick: int):
+    st.markdown("<span style='font-size:14px; opacity:0.8;'>" f"<b>{date_str}</b><br>" "기호를 선택하고 일정명을 입력하세요. (저장 시 자동으로 클라우드에 동기화됩니다)" "</span>", unsafe_allow_html=True)
+    c_events = load_custom_events(uid)
+    existing = c_events.get(date_str, {})
+    current_sym = existing.get("symbol", "없음")
+
+    with st.form(key=f"ce_form_{date_str}_{refresh_tick}", clear_on_submit=False):
+        sym = st.selectbox("기호 선택", CUSTOM_SYMBOLS, index=CUSTOM_SYMBOLS.index(current_sym) if current_sym in CUSTOM_SYMBOLS else 0)
+        name = st.text_input("일정명", value=existing.get("name", ""), placeholder="예: 금리결정")
+        submitted = st.form_submit_button("저장 (즉시 클라우드 동기화)", use_container_width=True)
+        if submitted:
+            if sym == "없음" or not name.strip():
+                if date_str in c_events: del c_events[date_str]
+            else: c_events[date_str] = {"symbol": sym, "name": name.strip()}
+            save_custom_events(uid, c_events)
+            st.toast("☁️ 일정 저장 & 클라우드 동기화 완료")
+            st.session_state["cal_refresh"] = refresh_tick + 1
+            st.session_state.pop("last_processed_cal_state", None)
+            st.rerun()
+
+@dialog_wrapper(" ")
+def show_event_dialog(props: dict, all_events: List[DividendEvent], uid: str):
+    ticker, event_id, event_type = props.get("ticker", ""), props.get("event_id", ""), props.get("event_type", "")
+    if f"star_state_{event_id}" not in st.session_state:
+        marks = load_marks(uid)
+        st.session_state[f"star_state_{event_id}"] = marks.get(event_id, {}).get("star", False)
+        st.session_state[f"heart_state_{event_id}"] = marks.get(event_id, {}).get("heart", False)
+    is_starred = st.session_state[f"star_state_{event_id}"]
+    is_hearted = st.session_state[f"heart_state_{event_id}"]
+
+    if event_type == "earnings":
+        body = f"<div class='gorani-card' style='margin-top: 5px;'><div class='gorani-kv'><span class='k'>Event</span><span class='v' style='color:#8B5CF6;'>Earnings Date</span></div><div class='gorani-kv'><span class='k'>Date</span><span class='v'>{props.get('event_date', '')}</span></div></div>"
+    else:
+        div_amt, price, yld = float(props.get("dividend_amount", 0) or 0), float(props.get("current_price", 0) or 0), float(props.get("annual_yield", 0) or 0)
+        _, savings = calc_tax_savings(price, div_amt)
+        body = f"""<div class="gorani-card" style="margin-top: 5px;">
+            <div class="gorani-kv"><span class="k">Status</span><span class="v" style="font-weight:400; font-size:14px;">{'(Estimated)' if props.get('estimated') else '(Declared)'}</span></div>
+            <div class="gorani-kv"><span class="k">Dividend Amount</span><span class="v">${div_amt:,.4f} / share</span></div>
+            <div class="gorani-kv"><span class="k">Buy Deadline</span><span class="v">{props.get('buy_deadline','')}</span></div>
+            <div class="gorani-kv"><span class="k">Ex-Dividend Date</span><span class="v">{props.get('ex_div_date','')}</span></div>
+            <div class="gorani-kv"><span class="k">Payment Date</span><span class="v">{props.get('payment_date','')}</span></div>
+            <div class="gorani-kv"><span class="k">Annual Yield</span><span class="v">{yld:.2f}%</span></div>
+            <div class="gorani-kv"><span class="k">Est. Tax Savings($10k)</span><span class="v">${savings:,.2f}</span></div>
+            <div class="gorani-kv"><span class="k">1회 절세 예상(과거5년)</span><span class="v" style="color:#EF4444;">${get_historical_tax_saving(ticker):,.2f}</span></div>
+        </div>"""
+
+    st.markdown("<p style='font-size:12px; opacity:0.7; margin:0;'>☁️ 모든 변경은 자동으로 클라우드에 저장됩니다.</p>", unsafe_allow_html=True)
+    header_cols = st.columns([7, 1.5, 1.5])
+    header_cols[0].markdown(f"<h2 style='margin:0; line-height: 40px;'>{ticker}</h2>", unsafe_allow_html=True)
+
+    if header_cols[1].button("⭐" if is_starred else "☆", key=f"btn_s_{event_id}", type="tertiary"): st.session_state[f"st_clicked_{event_id}"] = True
+    if header_cols[2].button("💗" if is_hearted else "♡", key=f"btn_h_{event_id}", type="tertiary"): st.session_state[f"ht_clicked_{event_id}"] = True
+
+    if st.session_state.get(f"st_clicked_{event_id}") or st.session_state.get(f"ht_clicked_{event_id}"):
+        m = load_marks(uid)
+        if event_id not in m: m[event_id] = {"star": False, "heart": False}
+        if st.session_state.get(f"st_clicked_{event_id}"):
+            st.session_state[f"star_state_{event_id}"] = not is_starred
+            m[event_id]["star"] = st.session_state[f"star_state_{event_id}"]
+        if st.session_state.get(f"ht_clicked_{event_id}"):
+            st.session_state[f"heart_state_{event_id}"] = not is_hearted
+            m[event_id]["heart"] = st.session_state[f"heart_state_{event_id}"]
+        save_marks(uid, m)
+        st.toast("☁️ 마크 저장 & 클라우드 동기화 완료")
+        st.session_state[f"st_clicked_{event_id}"] = False; st.session_state[f"ht_clicked_{event_id}"] = False
+        time.sleep(0.4)
+        st.session_state["cal_refresh"] = st.session_state.get("cal_refresh", 0) + 1
+        st.session_state.pop("last_processed_cal_state", None)
+        st.rerun()
+
+    st.markdown(body, unsafe_allow_html=True)
+    memos = load_memos(uid)
+    new_val = st.text_input("📝 종목 메모", value=memos.get(ticker, ""), key=f"memo_{ticker}")
+    if new_val != memos.get(ticker, ""):
+        memos[ticker] = new_val; save_memos(uid, memos); st.toast("☁️ 메모 저장 & 클라우드 동기화 완료")
+
+    schedule_df = _events_to_dataframe([e for e in all_events if e.ticker == ticker])
+    with st.expander("🗂 Projected Schedule (1 Year)", expanded=False):
+        if schedule_df.empty: st.info("No projected events available.")
+        else: st.dataframe(schedule_df, use_container_width=True, hide_index=True)
+
+
+# 상단 티커 클릭 시 띄울 공유 메모 팝업 핸들러 추가
+@dialog_wrapper("📝 종목 메모 (공유)")
+def show_memo_dialog(ticker: str, uid: str):
+    st.markdown(f"**{ticker}** 종목의 메모를 확인하고 수정합니다.<br><span style='font-size:12px; opacity:0.7;'>(저장 시 자동으로 클라우드에 동기화되며 모든 캘린더 일정에 반영됩니다)</span>", unsafe_allow_html=True)
+    memos = load_memos(uid)
+    current_memo = memos.get(ticker, "")
+    
+    with st.form(key=f"top_memo_form_{ticker}"):
+        new_val = st.text_area("메모 내용", value=current_memo, height=150, placeholder=f"{ticker}에 대해 메모(한줄 권장).", label_visibility="collapsed")
+        submitted = st.form_submit_button("저장 (즉시 클라우드 동기화)", use_container_width=True)
+        if submitted:
+            if new_val != current_memo:
+                if not new_val.strip():
+                    if ticker in memos: del memos[ticker]
+                else:
+                    memos[ticker] = new_val.strip()
+                save_memos(uid, memos)
+                st.toast(f"☁️ {ticker} 메모 저장 완료")
+            st.rerun()
+
+
+# ---------------------------------------------------------------------------
+# Portfolio state & Sidebar
+# ---------------------------------------------------------------------------
+def _ensure_portfolio_state(uid: str):
+    _read_local_store()
+    if st.session_state.get("dc_loaded_uid") != uid:
+        st.session_state["dc_portfolios"] = load_portfolios(uid)
+        st.session_state["dc_loaded_uid"] = uid
+        if st.session_state["dc_portfolios"] and "dc_active_portfolio" not in st.session_state:
+            st.session_state["dc_active_portfolio"] = next(iter(st.session_state["dc_portfolios"]))
+
+def _persist(uid: str): save_portfolios(uid, st.session_state["dc_portfolios"])
+
+def _render_sidebar_portfolio_manager(uid: str) -> Optional[str]:
+    portfolios: Dict[str, List[str]] = st.session_state["dc_portfolios"]
+    with st.sidebar:
+        st.header("📁 Portfolios")
+        st.caption(f"User: `{uid}`")
+        
+        st.markdown("---")
+        st.markdown(f"🔑 Polygon Key: {'✅ 연결됨' if POLYGON_API_KEY else '❌ 없음'}")
+        st.markdown(f"🔑 Finnhub Key: {'✅ 연결됨' if FINNHUB_API_KEY else '❌ 없음'}")
+        st.markdown("---")
+
+        with st.expander("➕ Create New Portfolio", expanded=not portfolios):
+            new_name = st.text_input("Portfolio Name", key="dc_new_pf_name", placeholder="e.g. Monthly Income")
+            if st.button("Create", key="dc_create_pf", use_container_width=True) and new_name.strip():
+                portfolios[new_name.strip()] = []; st.session_state["dc_active_portfolio"] = new_name.strip()
+                _persist(uid); st.toast("☁️ 포트폴리오 생성 & 클라우드 저장 완료"); st.rerun()
+        if not portfolios: st.info("Create a portfolio to begin."); return None
+        names = list(portfolios.keys())
+        active = st.selectbox("Select Portfolio", options=names, index=names.index(st.session_state.get("dc_active_portfolio", names[0])))
+        st.session_state["dc_active_portfolio"] = active
+        with st.expander("⚠️ Delete Portfolio", expanded=False):
+            if st.button("Delete Portfolio", disabled=not st.checkbox(f"Confirm delete '{active}'")):
+                portfolios.pop(active, None); st.session_state.pop("dc_active_portfolio", None)
+                _persist(uid); st.toast("☁️ 포트폴리오 삭제 & 클라우드 저장 완료"); st.rerun()
+    return active
+
+def _render_ticker_manager(uid: str, active: str) -> List[str]:
+    portfolios = st.session_state["dc_portfolios"]
+    current_tickers = list(portfolios.get(active, []))
+    head_cols = st.columns([3, 4, 3])
+    head_cols[0].markdown(f"#### 🎯 Tickers `{active}` <span style='color:var(--text-color); opacity:0.6; font-weight:400; font-size:13px'>({len(current_tickers)}/{MAX_TICKERS_PER_PORTFOLIO})</span>", unsafe_allow_html=True)
+    if current_tickers:
+        to_remove = head_cols[1].multiselect("삭제할 종목 선택", options=current_tickers, label_visibility="collapsed", placeholder="🗑️ 삭제할 종목...")
+        if head_cols[2].button("Remove", use_container_width=True, disabled=not to_remove):
+            portfolios[active] = [t for t in current_tickers if t not in to_remove]
+            _persist(uid); st.toast("☁️ 종목 삭제 & 클라우드 저장 완료"); st.rerun()
+    with st.form(key=f"dc_add_form_{active}", clear_on_submit=True):
+        add_cols = st.columns([4, 1])
+        raw = add_cols[0].text_input("Enter Ticker", placeholder="e.g. OHI, SCHD", label_visibility="collapsed")
+        if add_cols[1].form_submit_button("➕ Add Ticker", use_container_width=True) and raw.strip():
+            ticker = raw.upper().strip()
+            if len(current_tickers) < MAX_TICKERS_PER_PORTFOLIO and ticker not in current_tickers:
+                portfolios[active].append(ticker); _persist(uid); st.toast("☁️ 종목 추가 & 클라우드 저장 완료"); st.rerun()
+    
+    # -----------------------------------------------------------------------
+    # PC/모바일 하이브리드 UI 분기 (CSS에서 클래스명으로 렌더링 제어)
+    # -----------------------------------------------------------------------
+    if current_tickers:
+        
+        # 1. 데스크톱용 화면 (10열 버튼 그리드)
+        with st.container():
+            st.markdown("<span class='desktop-marker'></span>", unsafe_allow_html=True)
+            st.markdown("<div style='font-size: 13px; opacity: 0.8; margin-bottom: 8px;'>👆 <b>티커 버튼</b>을 클릭하면 종목 메모를 조회하고 수정할 수 있습니다.</div>", unsafe_allow_html=True)
+            cols_per_row = 10
+            for i in range(0, len(current_tickers), cols_per_row):
+                cols = st.columns(cols_per_row)
+                chunk = current_tickers[i:i + cols_per_row]
+                for j, t in enumerate(chunk):
+                    if cols[j].button(t, key=f"desktop_btn_{active}_{t}", use_container_width=True):
+                        show_memo_dialog(t, uid)
+                        
+        # 2. 모바일용 화면 (드롭다운 박스 + 메모 열기 버튼)
+        with st.container():
+            st.markdown("<span class='mobile-marker'></span>", unsafe_allow_html=True)
+            st.markdown("<div style='font-size: 13px; opacity: 0.8; margin-top: 5px; margin-bottom: 8px;'>📝 <b>종목 메모 관리</b> (아래에서 티커를 선택하고 메모 열기 버튼을 누르세요)</div>", unsafe_allow_html=True)
+            memo_cols = st.columns([6, 4])
+            selected_ticker = memo_cols[0].selectbox("메모할 티커 선택", current_tickers, label_visibility="collapsed", key=f"mobile_sel_{active}")
+            if memo_cols[1].button("📝 메모 팝업 열기", key=f"mobile_btn_{active}", use_container_width=True):
+                show_memo_dialog(selected_ticker, uid)
+                
+    else: 
+        st.caption("아직 등록된 종목이 없습니다.")
+        
+    return portfolios.get(active, [])
+
+
+@st.fragment
+def render_interactive_calendar(uid: str, active: str, events: List[DividendEvent], view_dt: date, type_filter: set):
+    valid_earnings_targets = {(e.ticker, e.event_date.year, e.event_date.month) for e in events if e.event_type in ["buy", "ex_div"]}
+    marks = load_marks(uid)
+    fc_events = [e.to_fc_event(marks) for e in events if e.event_type in type_filter and e.event_date.year != 2999 and (e.event_type != "earnings" or (e.ticker, e.event_date.year, e.event_date.month) in valid_earnings_targets)]
+    ce_css_parts = []
+    for d_str, c_data in load_custom_events(uid).items():
+        sym = c_data.get("symbol")
+        if not sym or sym == "없음": continue
+        safe_title = f"{sym}{c_data.get('name', '')}".replace("\\", "\\\\").replace('"', '\\"')
+        ce_css_parts.append(f'.fc-daygrid-day[data-date="{d_str}"] .fc-daygrid-day-top::before {{ content: "{safe_title}"; font-size: 11px; color: var(--text-color); flex: 1 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; text-align: left; padding: 0 4px 0 2px; font-weight: 500; line-height: 1.4; pointer-events: none !important; background: transparent; }}')
+    cal_state = calendar(events=fc_events, options=_calendar_options() | {"initialDate": view_dt.strftime("%Y-%m-%d")}, custom_css=_calendar_custom_css("\n".join(ce_css_parts)), callbacks=["eventClick", "dateClick", "select"], key=f"dc_cal_{active}_{view_dt.strftime('%Y%m')}_{len(fc_events)}_{st.session_state.get('cal_refresh', 0)}")
+    
+    current_state_str = json.dumps(cal_state, sort_keys=True, default=str) if isinstance(cal_state, dict) else str(cal_state)
+    if current_state_str and current_state_str not in ("null", "None", "{}", "") and st.session_state.get("last_processed_cal_state") != current_state_str:
+        st.session_state["last_processed_cal_state"] = current_state_str
+        clicked_event, clicked_date_str = _parse_calendar_state(cal_state)
+        if clicked_event and clicked_event.get("extendedProps"): show_event_dialog(clicked_event["extendedProps"], events, uid)
+        elif clicked_date_str: show_date_dialog(clicked_date_str, uid, st.session_state.get('cal_refresh', 0))
+
+
+# ---------------------------------------------------------------------------
+# Main entry
+# ---------------------------------------------------------------------------
+def render() -> None:
+    _inject_theme_css()
+    real_uid = _get_user_uid()
+    if not real_uid: st.error("❌ 로그인이 필요합니다. (구글 OAuth 로그인 후 다시 접근해 주세요)"); st.stop()
+    uid = real_uid
+    _ensure_portfolio_state(uid)
+    
+    # [수정] 앱이 실행될 때 기존의 커스텀 이벤트 기호를 새로운 기호로 일괄 자동 마이그레이션 합니다.
+    _migrate_custom_symbols(uid)
+
+    st.title("📅 배당 캘린더")
+    st.caption("배당주 포트폴리오를 만들고 향후 일정을 캘린더로 확인합니다. ☁️ 모든 변경사항은 자동으로 Firebase 에 동기화됩니다.")
+
+    top_cols = st.columns([2, 6, 2])
+    if top_cols[0].button("🔄 일정 최신화", type="primary", use_container_width=True):
+        fetch_ticker_bundle.clear()
+        st.session_state["force_api_refresh"] = True
+        st.session_state.pop("last_processed_cal_state", None) 
+        st.session_state["cal_refresh"] = st.session_state.get("cal_refresh", 0) + 1
+        st.rerun()
+    if top_cols[2].button("💾 강제 클라우드 저장", type="primary", use_container_width=True):
+        if auto_save_calendar_data(silent=False): st.toast("☁️ 배당 캘린더 전체가 Firebase 에 저장되었습니다!", icon="✅")
+        else: st.toast("❌ 저장에 실패했습니다. 디버그 패널을 확인해 주세요.", icon="⚠️")
+
+    with st.expander("🔧 동기화 상태 (디버그)", expanded=False):
+        st.markdown(f"- **UID:** `{uid}`\n- **Last Sync:** `{st.session_state.get('div_calendar_last_sync', '(아직 저장된 적 없음)')}`")
+        if err := st.session_state.get("div_calendar_last_error"): st.error(f"Last Error: {err}")
+        else: st.success("최근 동기화 오류 없음")
+
+    st.divider()
+    active = _render_sidebar_portfolio_manager(uid)
+    if not active: return
+    tickers = _render_ticker_manager(uid, active)
+    if not tickers: return
+
+    with st.spinner("Preparing calendar data..."):
+        force_refresh = st.session_state.get("force_api_refresh", False)
+        all_cached_data = load_cached_events(uid)
+
+        events = []
+        failed = []
+        tickers_to_fetch = []
+
+        if force_refresh:
+            tickers_to_fetch = list(tickers)
+        else:
+            for t in tickers:
+                if t in all_cached_data and all_cached_data[t]:
+                    events.extend([DividendEvent.from_dict(d) for d in all_cached_data[t]])
+                else:
+                    tickers_to_fetch.append(t)
+
+        if tickers_to_fetch:
+            status_placeholder = st.empty()
+            status_placeholder.info(f"🔄 최신 데이터 수집 중... (0/{len(tickers_to_fetch)}) ⏳\n\n(API 한도 우회를 위해 약간의 시간이 소요됩니다)")
+
+            fetched_events, failed_fetches = batch_project_events(tuple(tickers_to_fetch), status_placeholder)
+
+            if fetched_events:
+                events.extend(fetched_events)
+                for t in tickers_to_fetch:
+                    t_events = [e for e in fetched_events if e.ticker == t]
+                    if t_events:
+                        all_cached_data[t] = [e.to_dict() for e in t_events]
+                save_cached_events(uid, all_cached_data)
+
+            failed.extend(failed_fetches)
+            status_placeholder.empty()
+
+        if force_refresh:
+            st.session_state["force_api_refresh"] = False
+            st.toast("✅ 배당 데이터 전체 최신화 완료!", icon="✅")
+
+    if failed: st.warning(f"⚠️ 에러 발생 종목 누락: " + ", ".join(f"`{t}`" for t in failed))
+    if not events: st.error("가져올 수 있는 배당 일정이 없습니다."); return
+
+    view_dt = st.session_state.setdefault(f"view_date_{active}", date.today().replace(day=1))
+    active_this_month = {e.ticker for e in events if e.event_type == "buy" and e.event_date.year == view_dt.year and e.event_date.month == view_dt.month}
+    savings_data = []
+    for t in sorted({e.ticker for e in events}):
+        t_events = [e for e in events if e.ticker == t and e.event_type != "earnings"]
+        if not t_events: continue
+        
+        target_events = [e for e in t_events if e.event_type == "buy" and e.event_date.year == view_dt.year and e.event_date.month == view_dt.month]
+        best_event = target_events[0] if target_events else t_events[-1]
+        
+        _, savings = calc_tax_savings(best_event.current_price, best_event.dividend_amount)
+        savings_data.append({"종목": t, "예상 절세액": savings})
+    
+    df_savings = pd.DataFrame(savings_data).sort_values("예상 절세액", ascending=False).reset_index(drop=True)
+    styled_df = df_savings.style.apply(lambda r: ["background-color: rgba(37, 99, 235, 0.25); font-weight: bold;"] * len(r) if r["종목"] in active_this_month else [""] * len(r), axis=1).format({"예상 절세액": "${:,.2f}"})
+
+    with st.sidebar:
+        st.divider()
+        st.markdown(f"<div style='color:var(--text-color); font-size:14px; margin-bottom:2px; font-weight:600; opacity:0.8;'>💰 종목별 1회 예상 절세액</div><div style='color:var(--text-color); font-size:11px; margin-bottom:12px; opacity:0.6;'>({view_dt.year}년 {view_dt.month}월 달력 기준 'Buy Deadline' 종목 강조)</div>", unsafe_allow_html=True)
+        st.dataframe(styled_df, use_container_width=True, hide_index=True, height=min((len(df_savings) + 1) * 36 + 3, 600))
+
+    nav_cols = st.columns([1, 1, 8, 1])
+    if nav_cols[0].button("◀ 이전 달", use_container_width=True):
+        st.session_state[f"view_date_{active}"] = view_dt - relativedelta(months=1); st.session_state.pop("last_processed_cal_state", None); st.rerun()
+    if nav_cols[1].button("다음 달 ▶", use_container_width=True):
+        st.session_state[f"view_date_{active}"] = view_dt + relativedelta(months=1); st.session_state.pop("last_processed_cal_state", None); st.rerun()
+    with nav_cols[2]:
+        l_cols = st.columns(4)
+        # [수정] 🟢 Pay 부분의 기본값을 False 로 설정했습니다.
+        show_ex, show_buy, show_pay, show_ern = l_cols[0].checkbox("🔵 Ex-Div", True), l_cols[1].checkbox("🔴 Buy", True), l_cols[2].checkbox("🟢 Pay", False), l_cols[3].checkbox("🟣 Earn", True)
+    if nav_cols[3].button("TODAY", use_container_width=True):
+        st.session_state[f"view_date_{active}"] = date.today().replace(day=1); st.session_state.pop("last_processed_cal_state", None); st.rerun()
+
+    type_filter = set(t for t, show in zip(["ex_div", "buy", "payment", "earnings"], [show_ex, show_buy, show_pay, show_ern]) if show)
+    render_interactive_calendar(uid, active, events, view_dt, type_filter)
+
+    with st.expander("🗂 전체 배당 일정 (All Tickers, 1 Year)", expanded=False):
+        all_types = ["ex_div", "buy", "payment", "earnings"]
+        selected_types = st.multiselect("Filter by Event Type", options=all_types, default=all_types, format_func=lambda t: f"{t}  ·  {EVENT_TYPE_LABEL.get(t, t)}", key=f"dc_master_type_filter_{active}")
+        master_df = _events_to_dataframe(events)
+        if selected_types: master_df = master_df[master_df["Type"].isin(selected_types)].reset_index(drop=True)
+        else: master_df = master_df.iloc[0:0]
+        st.caption(f"{len(master_df):,} event(s) shown")
+        st.dataframe(master_df, use_container_width=True, hide_index=True)
+
+if __name__ == "__main__":
+    st.set_page_config(page_title="GORANI FINANCE · Dividend Calendar", page_icon="📅", layout="wide", initial_sidebar_state="expanded")
+    render()

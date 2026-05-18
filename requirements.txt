@@ -1,0 +1,9 @@
+streamlit
+pandas
+yfinance
+plotly
+streamlit-oauth
+streamlit-cookies-manager
+streamlit-calendar>=1.3.0
+python-dateutil>=2.8
+firebase-admin==6.5.0
