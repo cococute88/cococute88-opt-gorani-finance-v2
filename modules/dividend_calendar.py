@@ -292,7 +292,7 @@ class DividendEvent:
 def _safe_request(url: str, retries: int = 4) -> Optional[requests.Response]:
     for attempt in range(retries):
         try:
-            resp = requests.get(url, timeout=5)
+            resp = _http_session().get(url, timeout=5)
             if resp.status_code == 429:
                 # 429 에러 발생 시: Polygon은 한도가 타이트하므로 1분 대기, 나머지는 15초 대기
                 wait_time = 62 if "polygon.io" in url else 15
@@ -303,6 +303,13 @@ def _safe_request(url: str, retries: int = 4) -> Optional[requests.Response]:
             time.sleep(2)
     return None
 
+
+
+
+@st.cache_resource(show_spinner=False)
+def _http_session() -> requests.Session:
+    """네트워크 호출 재사용용 세션 (TCP/TLS 재사용)"""
+    return requests.Session()
 
 # ---------------------------------------------------------------------------
 # yfinance / Polygon.io / Finnhub access
@@ -473,6 +480,7 @@ def fetch_ticker_bundle(ticker: str) -> Optional[dict]:
 # ---------------------------------------------------------------------------
 # Frequency inference + projection
 # ---------------------------------------------------------------------------
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
 def infer_frequency_months(dividends: pd.Series) -> int:
     recent = dividends.tail(8)
     if len(recent) < 2: return 3
@@ -484,7 +492,8 @@ def infer_frequency_months(dividends: pd.Series) -> int:
     return 12
 
 
-def project_future_dividends(ticker: str, bundle: dict) -> List[DividendEvent]:
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 3)
+def _project_future_dividends_cached(ticker: str, bundle: dict) -> List[dict]:
     divs: pd.Series = bundle["dividends"]
     declared_events = bundle.get("declared_events", [])
     price: float = bundle["current_price"]
@@ -558,7 +567,11 @@ def project_future_dividends(ticker: str, bundle: dict) -> List[DividendEvent]:
         if e.event_date.year == 2999 or (start_date <= e.event_date <= horizon):
             final_events.append(e)
 
-    return final_events
+    return [e.to_dict() for e in final_events]
+
+
+def project_future_dividends(ticker: str, bundle: dict) -> List[DividendEvent]:
+    return [DividendEvent.from_dict(d) for d in _project_future_dividends_cached(ticker, bundle)]
 
 def batch_project_events(tickers: Tuple[str, ...], placeholder=None) -> Tuple[List[DividendEvent], List[str]]:
     all_events: List[DividendEvent] = []
