@@ -9,9 +9,44 @@ from core.firebase import load_data, save_data
 from streamlit.runtime.scriptrunner import StopException
 from streamlit_cookies_manager import EncryptedCookieManager
 from PIL import Image
-from modules import dividend_calendar
+from streamlit_option_menu import option_menu
 
 MAX_FAVORITE_LINKS = 10
+
+TOP_NAV_ITEMS = [
+    ("자산 시뮬레이터", "pages_app/1_asset_simulator.py", "graph-up"),
+    ("자산 트래커", "pages_app/2_asset_tracker.py", "wallet2"),
+    ("양도세치기 배당시뮬", "pages_app/3_dividend_sim.py", "cash-coin"),
+    ("매도전환계산기", "pages_app/4_conversion_analysis.py", "arrow-repeat"),
+    ("배당 캘린더", "pages_app/5_dividend_calendar.py", "calendar3"),
+]
+
+
+def render_top_navigation() -> None:
+    st.markdown(
+        "<div style='margin-bottom: 0.4rem; font-size: 0.9rem; color:#6b7684; font-weight:600;'>빠른 화면 이동</div>",
+        unsafe_allow_html=True,
+    )
+    selected = option_menu(
+        menu_title=None,
+        options=[item[0] for item in TOP_NAV_ITEMS],
+        icons=[item[2] for item in TOP_NAV_ITEMS],
+        orientation="horizontal",
+        key="top_quick_navigation",
+        styles={
+            "container": {"padding": "0.2rem 0", "overflow-x": "auto"},
+            "nav": {"flex-wrap": "wrap", "gap": "0.2rem"},
+            "nav-link": {"font-size": "0.9rem", "padding": "0.4rem 0.7rem"},
+            "nav-link-selected": {"background-color": "#1f6feb"},
+        },
+    )
+
+    if selected:
+        target_page = next((item[1] for item in TOP_NAV_ITEMS if item[0] == selected), None)
+        if target_page and st.session_state.get("_last_top_nav_page") != target_page:
+            st.session_state["_last_top_nav_page"] = target_page
+            st.switch_page(target_page)
+
 
 # =========================================================
 # 💡 1. 즐겨찾기 링크 관리 기능 세팅 (팝업 + 표 편집)
@@ -217,10 +252,11 @@ if is_authenticated:
             st.Page("pages_app/2_asset_tracker.py", title="자산 트래커", icon="💰"),
             st.Page("pages_app/3_dividend_sim.py", title="양도세치기 배당시뮬", icon="💵"),
             st.Page("pages_app/4_conversion_analysis.py", title="매도전환계산기", icon="🔄"),
-            st.Page(dividend_calendar.render, title="배당 캘린더", icon="📅", default=True) 
+            st.Page("pages_app/5_dividend_calendar.py", title="배당 캘린더", icon="📅", default=True)
         ]
     }
-    
+
+    render_top_navigation()
     nav = st.navigation(pages)
 
     try:
