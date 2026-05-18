@@ -23,10 +23,7 @@ TOP_NAV_ITEMS = [
 
 
 def render_top_navigation() -> None:
-    st.markdown(
-        "<div style='margin-bottom: 0.4rem; font-size: 0.9rem; color:#6b7684; font-weight:600;'>빠른 화면 이동</div>",
-        unsafe_allow_html=True,
-    )
+    st.markdown("<div style='margin-bottom: 0.4rem; font-size: 0.9rem; color:#6b7684; font-weight:600;'>빠른 화면 이동</div>", unsafe_allow_html=True)
     selected = option_menu(
         menu_title=None,
         options=[item[0] for item in TOP_NAV_ITEMS],
@@ -257,7 +254,7 @@ if is_authenticated:
     }
 
     render_top_navigation()
-    nav = st.navigation(pages)
+    nav = st.navigation(pages, position="hidden")
 
     try:
         nav.run()
