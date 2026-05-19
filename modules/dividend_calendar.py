@@ -676,25 +676,6 @@ def _inject_theme_css() -> None:
             .gorani-pill { display: inline-block; padding: 4px 10px; margin: 3px; background: var(--secondary-background-color); color: var(--text-color); border-radius: 999px; font-size: 12px; border: 1px solid rgba(128, 128, 128, 0.2); }
             div[data-testid="stCalendarContainer"] { background: var(--background-color); border-radius:12px; }
 
-            /* 배당 캘린더 화면 전용: Streamlit 기본 상단 여백을 줄여 메뉴 바로 아래에서 콘텐츠가 시작되도록 조정 */
-            div.block-container {
-                padding-top: 0.75rem !important;
-            }
-            section[data-testid="stSidebar"] div[data-testid="stSidebarContent"] {
-                padding-top: 0.75rem !important;
-            }
-            div.block-container h1 {
-                margin-top: 0 !important;
-                padding-top: 0 !important;
-            }
-            @media screen and (max-width: 768px) {
-                div.block-container {
-                    padding-top: 0.5rem !important;
-                }
-                section[data-testid="stSidebar"] div[data-testid="stSidebarContent"] {
-                    padding-top: 0.5rem !important;
-                }
-            }
 
             div[data-testid="stDialogContent"] > div:first-child > div[data-testid="stHorizontalBlock"] { display: flex !important; flex-wrap: nowrap !important; align-items: center !important; justify-content: space-between !important; }
             div[data-testid="stDialog"] button[kind="tertiary"] { padding: 0px !important; font-size: 1.6rem !important; height: 40px !important; width: 40px !important; }

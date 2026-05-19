@@ -144,6 +144,59 @@ st.set_page_config(
     initial_sidebar_state="collapsed" 
 )
 
+
+def _inject_global_layout_css() -> None:
+    """Apply shared Streamlit layout spacing for all authenticated app pages."""
+    st.markdown(
+        """
+        <style>
+            /* 모든 페이지 메인 콘텐츠 상단 여백 축소 */
+            main .block-container {
+                padding-top: 0.75rem !important;
+            }
+
+            /* Streamlit 버전별 대응 */
+            div[data-testid="stAppViewContainer"] main .block-container,
+            div.block-container {
+                padding-top: 0.75rem !important;
+            }
+
+            /* 페이지 제목 위쪽 여백 제거 */
+            main h1,
+            div.block-container h1 {
+                margin-top: 0 !important;
+                padding-top: 0 !important;
+            }
+
+            /* 사이드바 상단 여백 축소 - 여러 Streamlit selector 대응 */
+            section[data-testid="stSidebar"] div[data-testid="stSidebarContent"],
+            section[data-testid="stSidebar"] div[data-testid="stSidebarUserContent"] {
+                padding-top: 0.5rem !important;
+            }
+
+            /* 사이드바 내부 첫 블록 여백 축소 */
+            section[data-testid="stSidebar"] div[data-testid="stVerticalBlock"] {
+                gap: 0.75rem !important;
+            }
+
+            /* 모바일에서는 상단 메뉴와 콘텐츠가 겹치지 않도록 약간의 여백 유지 */
+            @media screen and (max-width: 768px) {
+                main .block-container,
+                div[data-testid="stAppViewContainer"] main .block-container,
+                div.block-container {
+                    padding-top: 0.5rem !important;
+                }
+
+                section[data-testid="stSidebar"] div[data-testid="stSidebarContent"],
+                section[data-testid="stSidebar"] div[data-testid="stSidebarUserContent"] {
+                    padding-top: 0.25rem !important;
+                }
+            }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
 components.html("""
     <script>
     var userAgent = navigator.userAgent.toLowerCase();
@@ -209,6 +262,8 @@ if is_authenticated:
         st.session_state["user"] = {"uid": user_uid}
     
     load_all_data(user_uid)
+
+    _inject_global_layout_css()
 
     pages = [
         st.Page("pages_app/1_asset_simulator.py", title="자산 시뮬레이터", icon="📊"),
