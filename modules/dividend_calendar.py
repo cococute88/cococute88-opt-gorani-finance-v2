@@ -918,28 +918,33 @@ def _normalize_ticker_inputs(raw: str) -> List[str]:
 
 def _render_sidebar_portfolio_manager(uid: str) -> Optional[str]:
     portfolios: Dict[str, List[str]] = st.session_state["dc_portfolios"]
-    with st.sidebar:
-        st.header("📁 Portfolios")
-        st.caption(f"User: `{uid}`")
-        
-        st.markdown("---")
-        st.markdown(f"🔑 Polygon Key: {'✅ 연결됨' if POLYGON_API_KEY else '❌ 없음'}")
-        st.markdown(f"🔑 Finnhub Key: {'✅ 연결됨' if FINNHUB_API_KEY else '❌ 없음'}")
-        st.markdown("---")
+    active: Optional[str] = None
 
-        with st.expander("➕ Create New Portfolio", expanded=not portfolios):
+    with st.sidebar:
+        if portfolios:
+            names = list(portfolios.keys())
+            current_active = st.session_state.get("dc_active_portfolio", names[0])
+            if current_active not in names:
+                current_active = names[0]
+            active = st.selectbox("Select Portfolio", options=names, index=names.index(current_active))
+            st.session_state["dc_active_portfolio"] = active
+
+        with st.expander("포트폴리오 관리", expanded=not portfolios):
+            st.markdown("**➕ Create New Portfolio**")
             new_name = st.text_input("Portfolio Name", key="dc_new_pf_name", placeholder="e.g. Monthly Income")
             if st.button("Create", key="dc_create_pf", use_container_width=True) and new_name.strip():
                 portfolios[new_name.strip()] = []; st.session_state["dc_active_portfolio"] = new_name.strip()
                 _persist(uid); st.toast("☁️ 포트폴리오 생성 & 클라우드 저장 완료"); st.rerun()
-        if not portfolios: st.info("Create a portfolio to begin."); return None
-        names = list(portfolios.keys())
-        active = st.selectbox("Select Portfolio", options=names, index=names.index(st.session_state.get("dc_active_portfolio", names[0])))
-        st.session_state["dc_active_portfolio"] = active
-        with st.expander("⚠️ Delete Portfolio", expanded=False):
-            if st.button("Delete Portfolio", disabled=not st.checkbox(f"Confirm delete '{active}'")):
-                portfolios.pop(active, None); st.session_state.pop("dc_active_portfolio", None)
-                _persist(uid); st.toast("☁️ 포트폴리오 삭제 & 클라우드 저장 완료"); st.rerun()
+
+            if portfolios and active:
+                st.markdown("**⚠️ Delete Portfolio**")
+                if st.button("Delete Portfolio", disabled=not st.checkbox(f"Confirm delete '{active}'")):
+                    portfolios.pop(active, None); st.session_state.pop("dc_active_portfolio", None)
+                    _persist(uid); st.toast("☁️ 포트폴리오 삭제 & 클라우드 저장 완료"); st.rerun()
+
+        if not portfolios:
+            st.info("Create a portfolio to begin.")
+
     return active
 
 def _render_ticker_manager(uid: str, active: str) -> List[str]:
@@ -1156,6 +1161,15 @@ def render() -> None:
         st.divider()
         st.markdown(f"<div style='color:var(--text-color); font-size:14px; margin-bottom:2px; font-weight:600; opacity:0.8;'>💰 종목별 1회 예상 절세액</div><div style='color:var(--text-color); font-size:11px; margin-bottom:12px; opacity:0.6;'>({view_dt.year}년 {view_dt.month}월 달력 기준 'Buy Deadline' 종목 강조)</div>", unsafe_allow_html=True)
         st.dataframe(styled_df, use_container_width=True, hide_index=True, height=min((len(df_savings) + 1) * 36 + 3, 600))
+        st.markdown(
+            f"""
+            <div style='font-size:12px; line-height:1.5; opacity:0.72; margin-top:10px;'>
+                <div>Polygon: {'✅ 연결됨' if POLYGON_API_KEY else '❌ 없음'}</div>
+                <div>Finnhub: {'✅ 연결됨' if FINNHUB_API_KEY else '❌ 없음'}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
     nav_cols = st.columns([1, 1, 8, 1])
     if nav_cols[0].button("◀ 이전 달", use_container_width=True):
