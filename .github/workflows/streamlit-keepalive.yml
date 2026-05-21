@@ -1,0 +1,52 @@
+name: Keep Streamlit app awake
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Streamlit Community Cloud sleeps after 12h of no traffic.
+    # Run off the top of the hour to reduce GitHub scheduler congestion.
+    - cron: "17 */6 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: streamlit-keepalive-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  wake:
+    name: Wake Streamlit Community Cloud app
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Playwright
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install playwright
+          python -m playwright install --with-deps chromium
+
+      - name: Open app and click wake button if needed
+        env:
+          STREAMLIT_APP_URL: "https://cococute88-opt-gorani-finance-v2-mmdtk57yfrbq4853tl3x4k.streamlit.app/"
+          STREAMLIT_WAKE_MAX_WAIT_SECONDS: "300"
+        run: python scripts/wake_streamlit.py
+
+      - name: Upload debug artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: streamlit-wake-debug
+          path: |
+            wake_debug.png
+            wake_debug.html
+          if-no-files-found: ignore
