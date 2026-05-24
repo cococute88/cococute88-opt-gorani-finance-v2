@@ -2,6 +2,8 @@ import streamlit as st
 import pandas as pd
 import yfinance as yf
 import plotly.graph_objects as go
+import requests
+from io import StringIO
 from datetime import date, timedelta
 from ui.styles import TOSS_CSS
 
@@ -14,21 +16,87 @@ st.markdown(TOSS_CSS, unsafe_allow_html=True)
 # ──────────────────────────────────────────────
 # 2. 데이터 헬퍼 (전체 히스토리 캐시) - yfinance 안정성 개선 반영
 # ──────────────────────────────────────────────
+def _normalize_history_frame(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        raise ValueError("조회 결과가 비어 있습니다.")
+
+    normalized = df.copy()
+
+    if isinstance(normalized.columns, pd.MultiIndex):
+        if len(normalized.columns.levels) >= 2:
+            normalized.columns = normalized.columns.get_level_values(0)
+        else:
+            normalized.columns = [col[0] if isinstance(col, tuple) else col for col in normalized.columns]
+
+    if "Close" not in normalized.columns:
+        raise ValueError(f"Close 컬럼이 없습니다. 사용 가능 컬럼: {list(normalized.columns)}")
+
+    normalized.index = pd.to_datetime(normalized.index, errors="coerce")
+    normalized = normalized[~normalized.index.isna()]
+    if normalized.index.tz is not None:
+        normalized.index = normalized.index.tz_localize(None)
+    normalized.index = normalized.index.normalize()
+    normalized = normalized[~normalized.index.duplicated(keep="last")]
+    normalized = normalized.sort_index()
+
+    if normalized.empty:
+        raise ValueError("정규화 후 데이터가 비어 있습니다.")
+
+    return normalized
+
+
+def _fetch_stooq_history(ticker: str) -> pd.DataFrame:
+    stooq_symbol = f"{ticker.lower()}.us"
+    stooq_url = f"https://stooq.com/q/d/l/?s={stooq_symbol}&i=d"
+    response = requests.get(stooq_url, timeout=20)
+    response.raise_for_status()
+    raw = response.text.strip()
+    if not raw:
+        raise ValueError("Stooq 응답이 비어 있습니다.")
+    df = pd.read_csv(StringIO(raw))
+    if df.empty:
+        raise ValueError("Stooq CSV가 비어 있습니다.")
+    if "Date" not in df.columns:
+        raise ValueError(f"Stooq CSV에 Date 컬럼이 없습니다. 컬럼: {list(df.columns)}")
+    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+    df = df.dropna(subset=["Date"]).set_index("Date")
+    return _normalize_history_frame(df)
+
+
 @st.cache_data(ttl=60 * 60 * 6, show_spinner=False)
 def fetch_full_history(ticker: str) -> pd.DataFrame:
     if not ticker:
-        return pd.DataFrame()
+        raise ValueError("티커가 비어 있습니다.")
+
+    errors = []
+
     try:
-        # 💡 yf.download() 대신 안정적인 Ticker().history() 사용 및 타임존 충돌 방지
         tk = yf.Ticker(ticker)
-        df = tk.history(period="max")
-        if df is not None and not df.empty:
-            if df.index.tz is not None:
-                df.index = df.index.tz_localize(None)
-            return df
-        return pd.DataFrame()
-    except Exception:
-        return pd.DataFrame()
+        df = tk.history(period="max", auto_adjust=False, actions=False, raise_errors=True)
+        return _normalize_history_frame(df)
+    except Exception as e:
+        errors.append(f"yfinance.Ticker.history 실패: {e}")
+
+    try:
+        df = yf.download(
+            ticker,
+            period="max",
+            auto_adjust=False,
+            actions=False,
+            progress=False,
+            threads=False,
+            timeout=20,
+        )
+        return _normalize_history_frame(df)
+    except Exception as e:
+        errors.append(f"yfinance.download 실패: {e}")
+
+    try:
+        return _fetch_stooq_history(ticker)
+    except Exception as e:
+        errors.append(f"Stooq CSV 실패: {e}")
+
+    raise ValueError(f"{ticker} 히스토리 조회 실패 | " + " | ".join(errors))
 
 
 def _to_series(close_obj):
@@ -38,23 +106,31 @@ def _to_series(close_obj):
 
 
 def _compute_common_start(sell: str, buy: str):
-    sell_full = fetch_full_history(sell)
-    buy_full = fetch_full_history(buy)
-    missing = []
-    if sell_full.empty: missing.append(sell)
-    if buy_full.empty: missing.append(buy)
-    if missing:
-        raise ValueError(f"히스토리 조회 실패: {', '.join(missing)}")
+    try:
+        sell_full = fetch_full_history(sell)
+    except Exception as e:
+        raise ValueError(f"{sell} 데이터 로드 실패: {e}") from e
+
+    try:
+        buy_full = fetch_full_history(buy)
+    except Exception as e:
+        raise ValueError(f"{buy} 데이터 로드 실패: {e}") from e
+
     sell_first = sell_full.index.min().date()
     buy_first = buy_full.index.min().date()
     return max(sell_first, buy_first), sell_first, buy_first
 
 
 def build_dataset(sell: str, buy: str, start_d, end_d):
-    sell_full = fetch_full_history(sell)
-    buy_full = fetch_full_history(buy)
-    if sell_full.empty or buy_full.empty:
-        raise ValueError("히스토리 조회 실패")
+    try:
+        sell_full = fetch_full_history(sell)
+    except Exception as e:
+        raise ValueError(f"{sell} 히스토리 조회 실패: {e}") from e
+
+    try:
+        buy_full = fetch_full_history(buy)
+    except Exception as e:
+        raise ValueError(f"{buy} 히스토리 조회 실패: {e}") from e
 
     sell_close = _to_series(sell_full['Close'])
     buy_close = _to_series(buy_full['Close'])
@@ -162,7 +238,13 @@ elif st.session_state["auto_info"]:
     later = info["sell"] if info["sell_first"] >= info["buy_first"] else info["buy"]
     st.info(f"📅 공통 시작일 자동 추천: **{info['common']}** (더 늦은 **{later}** 기준)")
 
-run = st.button("분석 실행", type="primary", use_container_width=True)
+btn_col1, btn_col2 = st.columns(2)
+with btn_col1:
+    run = st.button("분석 실행", type="primary", use_container_width=True)
+with btn_col2:
+    if st.button("캐시 초기화", use_container_width=True):
+        fetch_full_history.clear()
+        st.rerun()
 
 
 # ──────────────────────────────────────────────
