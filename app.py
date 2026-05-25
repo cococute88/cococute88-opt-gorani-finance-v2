@@ -144,6 +144,8 @@ st.set_page_config(
     initial_sidebar_state="collapsed" 
 )
 
+st.caption("GORANI_FINANCE_APP_READY")
+
 
 def _inject_global_layout_css() -> None:
     """Apply shared Streamlit layout spacing for all authenticated app pages."""
