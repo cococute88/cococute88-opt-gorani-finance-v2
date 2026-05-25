@@ -29,6 +29,35 @@ def metric(label, value, sub=None, kind=""):
     sub_html = f'<div class="sub">{sub}</div>' if sub else ""
     st.markdown(f'<div class="{cls}"><div class="label">{label}</div><div class="value">{value}</div>{sub_html}</div>', unsafe_allow_html=True)
 
+
+def build_default_plan_records(start_year: int, sim_years: int):
+    years = list(range(start_year, start_year + sim_years))
+    new_df = pd.DataFrame({
+        "년도": years,
+        "월적립액(만원)": [300.0 if i <= 7 else 0.0 for i in range(len(years))],
+        "ISA적립": [True if i <= 7 else False for i in range(len(years))],
+        "연금저축적립": [True if i <= 7 else False for i in range(len(years))],
+        "ISA연금이전": [False] * len(years),
+    })
+    return json.loads(new_df.to_json(orient="records"))
+
+
+def is_valid_cached_plan(cached_plan, current_sim: int, current_start: int) -> bool:
+    if not isinstance(cached_plan, list):
+        return False
+    if not cached_plan:
+        return False
+    if len(cached_plan) != current_sim:
+        return False
+    first = cached_plan[0]
+    if not isinstance(first, dict):
+        return False
+    if "년도" not in first:
+        return False
+    if first["년도"] != current_start:
+        return False
+    return True
+
 # 2. 강력한 새로고침 및 페이지 이동 방어 시스템
 def save_to_firebase():
     cfg = {
@@ -84,6 +113,18 @@ if "start_year" not in st.session_state or "init_isa" not in st.session_state:
     st.session_state.withdraw_increase = float(saved.get("withdraw_increase", 3.0))
     st.session_state.withdraw_delay = int(saved.get("withdraw_delay", 1))
     st.session_state.plan_data_cache = saved.get("plan_data", [])
+
+# 구버전/손상 캐시가 남아 있어도 즉시 정상화
+if not is_valid_cached_plan(
+    st.session_state.get("plan_data_cache"),
+    int(st.session_state.get("sim_years", 30)),
+    int(st.session_state.get("start_year", now.year)),
+):
+    st.session_state.plan_data_cache = build_default_plan_records(
+        int(st.session_state.get("start_year", now.year)),
+        int(st.session_state.get("sim_years", 30)),
+    )
+    save_to_firebase()
 
 # ----------------- UI 렌더링 -----------------
 
@@ -154,16 +195,8 @@ current_start = st.session_state.start_year
 current_sim = st.session_state.sim_years
 cached_plan = st.session_state.plan_data_cache
 
-if not cached_plan or len(cached_plan) != current_sim or cached_plan[0]["년도"] != current_start:
-    years = list(range(current_start, current_start + current_sim))
-    new_df = pd.DataFrame({
-        "년도": years,
-        "월적립액(만원)": [300.0 if i <= 7 else 0.0 for i in range(len(years))],
-        "ISA적립": [True if i <= 7 else False for i in range(len(years))],
-        "연금저축적립": [True if i <= 7 else False for i in range(len(years))],
-        "ISA연금이전": [False] * len(years),
-    })
-    st.session_state.plan_data_cache = json.loads(new_df.to_json(orient="records"))
+if not is_valid_cached_plan(cached_plan, current_sim, current_start):
+    st.session_state.plan_data_cache = build_default_plan_records(current_start, current_sim)
     save_to_firebase()
 
 df_for_edit = pd.DataFrame(st.session_state.plan_data_cache)
@@ -181,6 +214,9 @@ edited_df = st.data_editor(df_for_edit, hide_index=True, use_container_width=Tru
 )
 
 edited_records = json.loads(edited_df.to_json(orient="records"))
+# 데이터 에디터 변환 과정에서 년도 컬럼 누락/손상이 생기면 즉시 재계산
+if not is_valid_cached_plan(edited_records, current_sim, current_start):
+    edited_records = build_default_plan_records(current_start, current_sim)
 if st.session_state.plan_data_cache != edited_records:
     st.session_state.plan_data_cache = edited_records
     save_to_firebase()
