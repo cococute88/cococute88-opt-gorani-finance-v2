@@ -9,13 +9,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: wake-streamlit-${{ github.ref }}
+  group: wake-streamlit
   cancel-in-progress: true
 
 jobs:
   wake-streamlit:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
 
     steps:
       - name: Checkout
@@ -34,9 +34,10 @@ jobs:
 
       - name: Wake Streamlit app
         env:
-          STREAMLIT_APP_URL: "https://cococute88-opt-gorani-finance-v2-mmdtk57yfrbq4853tl3x4k.streamlit.app"
+          STREAMLIT_APP_URL: "https://cococute88-opt-gorani-finance-v2-mmdtk57yfrbq4853tl3x4k.streamlit.app/"
           EXPECTED_READY_TEXT: "GORANI_FINANCE_APP_READY"
-          MAX_WAIT_SECONDS: "900"
+          MAX_WAIT_SECONDS: "1200"
+          POLL_SECONDS: "25"
           SCREENSHOT_PATH: "artifacts/streamlit-wakeup.png"
           HTML_PATH: "artifacts/streamlit-wakeup.html"
         run: |

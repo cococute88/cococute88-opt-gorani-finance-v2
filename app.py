@@ -4,11 +4,25 @@ from streamlit_oauth import OAuth2Component
 import base64
 import json
 import pandas as pd
-from core.sync import load_all_data
-from core.firebase import load_data, save_data
 from streamlit.runtime.scriptrunner import StopException
 from streamlit_cookies_manager import EncryptedCookieManager
 from PIL import Image
+
+try:
+    icon_img = Image.open("bear.ico")
+except FileNotFoundError:
+    icon_img = "🧸"
+
+st.set_page_config(
+    page_title="Gorani finance",
+    page_icon=icon_img,
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
+st.caption("GORANI_FINANCE_APP_READY")
+
+from core.sync import load_all_data  # noqa: E402
+from core.firebase import load_data, save_data  # noqa: E402
 
 MAX_FAVORITE_LINKS = 10
 
@@ -131,21 +145,6 @@ AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 REVOKE_TOKEN_URL = "https://oauth2.googleapis.com/revoke"
 oauth2 = OAuth2Component(CLIENT_ID, CLIENT_SECRET, AUTHORIZE_URL, TOKEN_URL, REVOKE_TOKEN_URL)
-
-try:
-    icon_img = Image.open("bear.ico")
-except FileNotFoundError:
-    icon_img = "🧸" 
-
-st.set_page_config(
-    page_title="Gorani finance",
-    page_icon=icon_img,
-    layout="wide",
-    initial_sidebar_state="collapsed" 
-)
-
-st.caption("GORANI_FINANCE_APP_READY")
-
 
 def _inject_global_layout_css() -> None:
     """Apply shared Streamlit layout spacing for all authenticated app pages."""
