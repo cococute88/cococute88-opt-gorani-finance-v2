@@ -457,3 +457,253 @@ def align_and_convert_to_krw(usd_close, usdkrw_rate):
 
     aligned_rate = aligned_rate.reindex(krw_close.index)
     return krw_close, aligned_rate
+
+
+
+# ──────────────────────────────────────────────
+# 고라니 시장온도 v2: CNN 유사 7요소 방식 순수 계산 함수
+# ──────────────────────────────────────────────
+import math as _math
+
+
+def rolling_zscore(series, window: int = 252, min_periods: int = 80):
+    """시계열의 rolling z-score 최신값을 반환한다.
+
+    (latest - rolling_mean) / rolling_std. 데이터 부족/std==0 이면 None.
+    """
+    s = _coerce_close(series)
+    if s.empty or len(s) < min_periods:
+        return None
+    rm = s.rolling(window, min_periods=min_periods).mean()
+    rs = s.rolling(window, min_periods=min_periods).std()
+    latest_val = _to_float_or_none(s.iloc[-1])
+    latest_mean = _to_float_or_none(rm.iloc[-1])
+    latest_std = _to_float_or_none(rs.iloc[-1])
+    if latest_val is None or latest_mean is None or latest_std is None:
+        return None
+    if latest_std == 0:
+        return 0.0
+    return (latest_val - latest_mean) / latest_std
+
+
+def sigmoid_score(z, k: float = 1.0, invert: bool = False):
+    """z-score 를 0~100 점수로 변환한다 (로지스틱 함수).
+
+    z=0 → 50, z↑ → 100, z↓ → 0.
+    invert=True 이면 공포방향 지표의 부호를 반전한다.
+    """
+    val = _to_float_or_none(z)
+    if val is None:
+        return None
+    if invert:
+        val = -val
+    # 극단값 방어 (exp overflow 방지)
+    val = max(-10.0, min(10.0, val * k))
+    try:
+        score = 100.0 / (1.0 + _math.exp(-val))
+    except OverflowError:
+        score = 0.0 if val < 0 else 100.0
+    return clip_score(score)
+
+
+def _ratio_latest(series_a, series_b):
+    """두 종가 Series 의 최신 비율 (a/b) 을 반환한다. 실패 시 None."""
+    a = _coerce_close(series_a)
+    b = _coerce_close(series_b)
+    if a.empty or b.empty:
+        return None
+    la = _to_float_or_none(a.iloc[-1])
+    lb = _to_float_or_none(b.iloc[-1])
+    if la is None or lb is None or lb == 0:
+        return None
+    return la / lb
+
+
+def _return_n(series, n: int = 20):
+    """최근 n 거래일 단순 수익률 (latest/latest-n - 1). 실패 시 None."""
+    s = _coerce_close(series)
+    if s.empty or len(s) <= n:
+        return None
+    latest = _to_float_or_none(s.iloc[-1])
+    past = _to_float_or_none(s.iloc[-1 - n])
+    if latest is None or past is None or past == 0:
+        return None
+    return latest / past - 1.0
+
+
+def compute_gorani_v2_components(
+    spy_close=None,
+    rsp_close=None,
+    hyg_close=None,
+    lqd_close=None,
+    tlt_close=None,
+    vix_close=None,
+    pcr_close=None,
+    vix3m_close=None,
+    k: float = 1.0,
+):
+    """고라니 시장온도 v2 구성요소별 점수(0~100)를 계산한다.
+
+    CNN 7요소 철학 근사: 252일 rolling z-score → sigmoid(0~100).
+    각 구성요소에 계산 가능 여부와 점수를 dict 로 반환한다.
+    반환: {"components": {이름: score|None}, "available_count": int}
+    """
+    components = {}
+
+    # 1) Momentum: SPY / SPY 125일 MA - 1
+    spy = _coerce_close(spy_close)
+    if not spy.empty and len(spy) >= 125:
+        ma125 = spy.rolling(125).mean()
+        momentum_raw = spy / ma125 - 1.0
+        z = rolling_zscore(momentum_raw, window=252, min_periods=80)
+        components["Momentum"] = sigmoid_score(z, k=k, invert=False)
+    else:
+        components["Momentum"] = None
+
+    # 2) Price Strength: SPY 252일 구간 내 위치
+    if not spy.empty and len(spy) >= 252:
+        window_252 = spy.tail(252)
+        hi = _to_float_or_none(window_252.max())
+        lo = _to_float_or_none(window_252.min())
+        cur = _to_float_or_none(spy.iloc[-1])
+        if hi is not None and lo is not None and cur is not None and hi != lo:
+            raw_position = (cur - lo) / (hi - lo)  # 0~1
+            # z-score 대신 직접 0~100 매핑 (이미 0~1 범위)
+            components["Price Strength"] = clip_score(raw_position * 100.0)
+        else:
+            components["Price Strength"] = None
+    else:
+        components["Price Strength"] = None
+
+    # 3) Breadth: RSP/SPY 비율의 20일 변화율
+    rsp = _coerce_close(rsp_close)
+    if not spy.empty and not rsp.empty:
+        # 날짜 합집합 → 비율 계산
+        combined = pd.concat([spy.rename("spy"), rsp.rename("rsp")], axis=1).dropna()
+        if len(combined) >= 40:
+            ratio = combined["rsp"] / combined["spy"]
+            ratio_change = ratio / ratio.shift(20) - 1.0
+            z = rolling_zscore(ratio_change.dropna(), window=252, min_periods=80)
+            components["Breadth"] = sigmoid_score(z, k=k, invert=False)
+        else:
+            components["Breadth"] = None
+    else:
+        components["Breadth"] = None
+
+    # 4) Put/Call: PCR (높을수록 공포 → invert)
+    pcr = _coerce_close(pcr_close)
+    if not pcr.empty and len(pcr) >= 10:
+        pcr_5d = pcr.rolling(5).mean()
+        z = rolling_zscore(pcr_5d.dropna(), window=252, min_periods=80)
+        components["Put/Call"] = sigmoid_score(z, k=k, invert=True)
+    else:
+        # proxy: VIX / VIX3M (높을수록 단기 공포 우위 → invert)
+        vix = _coerce_close(vix_close)
+        vix3m = _coerce_close(vix3m_close)
+        if not vix.empty and not vix3m.empty:
+            combined_v = pd.concat([vix.rename("vix"), vix3m.rename("vix3m")], axis=1).dropna()
+            if len(combined_v) >= 80:
+                ratio_v = combined_v["vix"] / combined_v["vix3m"]
+                z = rolling_zscore(ratio_v, window=252, min_periods=80)
+                components["Put/Call"] = sigmoid_score(z, k=k, invert=True)
+            else:
+                components["Put/Call"] = None
+        else:
+            components["Put/Call"] = None
+
+    # 5) Junk Bond Demand: HYG/LQD 비율
+    hyg = _coerce_close(hyg_close)
+    lqd = _coerce_close(lqd_close)
+    if not hyg.empty and not lqd.empty:
+        combined_jb = pd.concat([hyg.rename("hyg"), lqd.rename("lqd")], axis=1).dropna()
+        if len(combined_jb) >= 80:
+            ratio_jb = combined_jb["hyg"] / combined_jb["lqd"]
+            z = rolling_zscore(ratio_jb, window=252, min_periods=80)
+            components["Junk Bond"] = sigmoid_score(z, k=k, invert=False)
+        else:
+            components["Junk Bond"] = None
+    else:
+        components["Junk Bond"] = None
+
+    # 6) Market Volatility: VIX / VIX 50일 MA (높을수록 공포 → invert)
+    vix = _coerce_close(vix_close)
+    if not vix.empty and len(vix) >= 80:
+        vix_ma50 = vix.rolling(50).mean()
+        vix_ratio = vix / vix_ma50
+        z = rolling_zscore(vix_ratio.dropna(), window=252, min_periods=80)
+        components["Volatility"] = sigmoid_score(z, k=k, invert=True)
+    else:
+        components["Volatility"] = None
+
+    # 7) Safe Haven Demand: SPY 20일 수익률 - TLT 20일 수익률
+    tlt = _coerce_close(tlt_close)
+    if not spy.empty and not tlt.empty:
+        spy_ret = _return_n(spy, 20)
+        tlt_ret = _return_n(tlt, 20)
+        if spy_ret is not None and tlt_ret is not None:
+            # 전체 시계열의 z-score 필요 → 비율 시계열 생성
+            combined_sh = pd.concat([spy.rename("spy"), tlt.rename("tlt")], axis=1).dropna()
+            if len(combined_sh) >= 80:
+                spy_roll_ret = combined_sh["spy"] / combined_sh["spy"].shift(20) - 1.0
+                tlt_roll_ret = combined_sh["tlt"] / combined_sh["tlt"].shift(20) - 1.0
+                diff = (spy_roll_ret - tlt_roll_ret).dropna()
+                z = rolling_zscore(diff, window=252, min_periods=80)
+                components["Safe Haven"] = sigmoid_score(z, k=k, invert=False)
+            else:
+                components["Safe Haven"] = None
+        else:
+            components["Safe Haven"] = None
+    else:
+        components["Safe Haven"] = None
+
+    available = {name: score for name, score in components.items() if score is not None}
+    return {"components": components, "available_count": len(available)}
+
+
+def compute_gorani_market_temperature_v2(
+    spy_close=None,
+    rsp_close=None,
+    hyg_close=None,
+    lqd_close=None,
+    tlt_close=None,
+    vix_close=None,
+    pcr_close=None,
+    vix3m_close=None,
+    k: float = 1.0,
+    min_components: int = 4,
+):
+    """고라니 시장온도 v2 최종 점수를 계산한다.
+
+    반환: {"score": float|None, "components": dict, "available_count": int, "ok": bool}
+    ok=False 이면 min_components 미충족. score 는 가용 구성요소 평균.
+    """
+    result = compute_gorani_v2_components(
+        spy_close=spy_close,
+        rsp_close=rsp_close,
+        hyg_close=hyg_close,
+        lqd_close=lqd_close,
+        tlt_close=tlt_close,
+        vix_close=vix_close,
+        pcr_close=pcr_close,
+        vix3m_close=vix3m_close,
+        k=k,
+    )
+    comps = result["components"]
+    available = {n: s for n, s in comps.items() if s is not None}
+    count = len(available)
+
+    if count < min_components:
+        return {
+            "score": None,
+            "components": comps,
+            "available_count": count,
+            "ok": False,
+        }
+
+    score = sum(available.values()) / count
+    return {
+        "score": clip_score(score),
+        "components": comps,
+        "available_count": count,
+        "ok": True,
+    }
