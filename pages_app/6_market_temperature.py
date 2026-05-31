@@ -6,7 +6,14 @@ import requests
 from io import StringIO
 
 from ui.styles import TOSS_CSS
-from logic.market import compute_rsi, compute_drawdown_series
+from logic.market import (
+    compute_rsi,
+    compute_drawdown_series,
+    compute_distance_from_moving_average,
+    compute_gorani_market_temperature,
+    classify_fear_greed_score,
+    find_score_in_payload,
+)
 
 # ──────────────────────────────────────────────
 # 1. 디자인
@@ -160,6 +167,44 @@ def _last_valid(series: pd.Series):
     return float(clean.iloc[-1])
 
 
+@st.cache_data(ttl=60 * 30, show_spinner=False)
+def fetch_cnn_fear_greed():
+    """CNN Fear & Greed 현재값(0~100)을 requests 로 직접 조회한다.
+
+    응답 구조 변경에 대비해 점수를 재귀 탐색하며, 실패 시 None 을 반환하여
+    페이지가 죽지 않도록 한다. (별도 패키지 미사용)
+    """
+    url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "application/json, text/plain, */*",
+        "Referer": "https://edition.cnn.com/markets/fear-and-greed",
+    }
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+    except Exception:
+        return None
+
+    # 1) 알려진 경로 우선 시도
+    try:
+        fg = data.get("fear_and_greed") if isinstance(data, dict) else None
+        if isinstance(fg, dict):
+            score = find_score_in_payload(fg)
+            if score is not None:
+                return float(score)
+    except Exception:
+        pass
+
+    # 2) 전체 구조 재귀 탐색 폴백
+    try:
+        score = find_score_in_payload(data)
+        return float(score) if score is not None else None
+    except Exception:
+        return None
+
+
 # ──────────────────────────────────────────────
 # 3. 차트
 # ──────────────────────────────────────────────
@@ -256,11 +301,86 @@ if failures:
     else:
         st.info(f"ℹ️ 일부 종목 데이터를 불러오지 못했습니다: {failed_names} (나머지는 정상 표시됩니다.)")
 
-if closes:
-    # RSI 는 전체 종가로 계산 후 표시 구간만 잘라낸다 (구간 시작점의 RSI 정확도 보존)
-    rsi_full = {t: compute_rsi(s, period=14) for t, s in closes.items()}
-    dd_full = {t: compute_drawdown_series(s) for t, s in closes.items()}
+# RSI / 하락률은 전체 종가로 미리 계산 (심리 요약 + 차트에서 함께 사용)
+rsi_full = {t: compute_rsi(s, period=14) for t, s in closes.items()}
+dd_full = {t: compute_drawdown_series(s) for t, s in closes.items()}
 
+
+# ──────────────────────────────────────────────
+# 4-1. 시장 심리 요약 (CNN Fear & Greed / 고라니 시장온도 / VIX)
+# ──────────────────────────────────────────────
+cnn_value = fetch_cnn_fear_greed()
+
+vix_value = None
+vix_failed = False
+try:
+    vix_series = fetch_close_series("^VIX")
+    vix_value = _last_valid(vix_series)
+    if vix_value is None:
+        vix_failed = True
+except Exception:  # noqa: BLE001 - VIX 실패는 경고만, 페이지는 유지
+    vix_failed = True
+
+gorani = compute_gorani_market_temperature(
+    qqq_rsi=_last_valid(rsi_full.get("QQQ")),
+    spy_rsi=_last_valid(rsi_full.get("SPY")),
+    qqq_drawdown=_last_valid(dd_full.get("QQQ")),
+    spy_drawdown=_last_valid(dd_full.get("SPY")),
+    spy_ma_distance=compute_distance_from_moving_average(closes.get("SPY"), 200),
+    vix_level=vix_value,
+)
+gorani_score = gorani["score"]
+
+st.markdown("#### 시장 심리 요약")
+sent1, sent2, sent3 = st.columns(3)
+
+with sent1:
+    if cnn_value is not None:
+        st.metric("CNN Fear & Greed", f"{cnn_value:.0f}")
+        st.caption(f"상태: {classify_fear_greed_score(cnn_value)}")
+    else:
+        st.metric("CNN Fear & Greed", "N/A")
+        st.caption("호출 실패 · 고라니 시장온도로 대체")
+
+with sent2:
+    if gorani_score is not None:
+        primary = " (주요 지표)" if cnn_value is None else ""
+        st.metric("고라니 시장온도", f"{gorani_score:.0f}")
+        st.caption(f"상태: {classify_fear_greed_score(gorani_score)}{primary}")
+    else:
+        st.metric("고라니 시장온도", "N/A")
+        st.caption("산출 가능한 지표 없음")
+
+with sent3:
+    if vix_value is not None:
+        st.metric("현재 VIX", f"{vix_value:.1f}")
+        st.caption("참고: VIX가 높을수록 시장 불안 심리가 큼")
+    else:
+        st.metric("현재 VIX", "N/A")
+        st.caption("VIX 조회 실패")
+
+if cnn_value is None and gorani_score is not None:
+    st.info("ℹ️ CNN Fear & Greed 호출에 실패하여 자체 **고라니 시장온도**를 주요 지표로 표시합니다.")
+if vix_failed:
+    st.warning("⚠️ VIX(^VIX) 조회에 실패했습니다. 나머지 지표는 정상 표시됩니다.")
+
+if gorani["components"]:
+    with st.expander("고라니 시장온도 구성요소 보기", expanded=False):
+        comp_text = " · ".join(
+            f"{name} {value:.0f}" for name, value in gorani["components"].items()
+        )
+        st.caption(
+            f"가용 지표 {len(gorani['components'])}개 평균 · {comp_text}. "
+            "RSI↑ · 하락폭↓ · 200일선 위 · VIX↓ 일수록 탐욕(점수↑)으로 해석합니다."
+        )
+
+st.markdown("<hr style='border:0; border-top:1px solid #F2F4F6;'>", unsafe_allow_html=True)
+
+
+# ──────────────────────────────────────────────
+# 4-2. RSI 14 / 고점 대비 하락률 (기존 MVP 유지)
+# ──────────────────────────────────────────────
+if closes:
     rsi_view = {t: _slice_recent(s, lookback) for t, s in rsi_full.items()}
     dd_view = {t: _slice_recent(s, lookback) for t, s in dd_full.items()}
 
@@ -299,7 +419,8 @@ if closes:
         "고점 대비 하락률은 표시 구간 이전을 포함한 전체 고점 기준입니다."
     )
 
-# 캐시 초기화 (시세가 일시적으로 비어 있을 때 수동 갱신용)
+# 캐시 초기화 (시세/심리 데이터가 일시적으로 비어 있을 때 수동 갱신용)
 if st.button("🔄 시세 캐시 초기화", use_container_width=True):
     fetch_close_series.clear()
+    fetch_cnn_fear_greed.clear()
     st.rerun()

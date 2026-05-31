@@ -126,3 +126,186 @@ def compute_mdd(close) -> dict:
         "peak_date": peak_date,
         "trough_date": trough_date,
     }
+
+
+
+# ──────────────────────────────────────────────
+# STEP 3: 시장 심리(Fear & Greed / 고라니 시장온도) 순수 계산 함수
+# ──────────────────────────────────────────────
+def _to_float_or_none(value):
+    """숫자로 변환 가능하면 float, 아니면(또는 NaN) None 을 반환한다."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    if result != result:  # NaN
+        return None
+    return result
+
+
+def clip_score(value, low: float = 0.0, high: float = 100.0):
+    """값을 [low, high] 범위로 제한한다. 변환 불가/NaN 이면 None."""
+    result = _to_float_or_none(value)
+    if result is None:
+        return None
+    return max(low, min(high, result))
+
+
+def classify_fear_greed_score(score):
+    """0~100 점수를 한국어 심리 라벨로 분류한다.
+
+    0~25 극단적 공포 / 25~45 공포 / 45~55 중립 / 55~75 탐욕 / 75~100 극단적 탐욕.
+    (구간 하한 포함 기준) 값이 없으면 None 을 반환한다.
+    """
+    result = _to_float_or_none(score)
+    if result is None:
+        return None
+    if result < 25:
+        return "극단적 공포"
+    if result < 45:
+        return "공포"
+    if result < 55:
+        return "중립"
+    if result < 75:
+        return "탐욕"
+    return "극단적 탐욕"
+
+
+def compute_distance_from_moving_average(close, window: int = 200):
+    """종가의 (현재가 / window일 단순이동평균 - 1) 을 반환한다.
+
+    값은 비율(예: 0.05 == 이동평균 대비 +5%). 데이터가 부족하거나 계산
+    불가하면 None 을 반환한다.
+    """
+    series = _coerce_close(close)
+
+    try:
+        window = int(window)
+    except (TypeError, ValueError):
+        return None
+    if window < 1 or series.empty or len(series) < window:
+        return None
+
+    ma = series.rolling(window).mean()
+    latest_price = _to_float_or_none(series.iloc[-1])
+    latest_ma = _to_float_or_none(ma.iloc[-1])
+    if latest_price is None or latest_ma is None or latest_ma == 0:
+        return None
+    return latest_price / latest_ma - 1.0
+
+
+def compute_gorani_market_temperature(
+    qqq_rsi=None,
+    spy_rsi=None,
+    qqq_drawdown=None,
+    spy_drawdown=None,
+    spy_ma_distance=None,
+    vix_level=None,
+):
+    """가용한 구성요소만으로 0~100 의 자체 "고라니 시장온도" 점수를 산출한다.
+
+    방향성:
+      - RSI 가 높을수록 탐욕(점수↑)
+      - 고점대비 하락폭이 작을수록 탐욕(점수↑)
+      - SPY 가 200일선 위에 있을수록 탐욕(점수↑)
+      - VIX 가 낮을수록 탐욕(점수↑)
+
+    구성요소가 하나도 없으면 score=None. CNN 7요소를 복제하지 않는 단순 합성.
+    반환: {"score": float|None, "components": {이름: 0~100 점수}}.
+    """
+    components = {}
+
+    rsi_qqq = clip_score(qqq_rsi)
+    if rsi_qqq is not None:
+        components["QQQ RSI"] = rsi_qqq
+
+    rsi_spy = clip_score(spy_rsi)
+    if rsi_spy is not None:
+        components["SPY RSI"] = rsi_spy
+
+    # 하락률(음수 비율): 0 → 100점, -50% 이하 → 0점
+    dd_qqq = _to_float_or_none(qqq_drawdown)
+    if dd_qqq is not None:
+        components["QQQ 하락률"] = clip_score(100.0 + dd_qqq * 200.0)
+
+    dd_spy = _to_float_or_none(spy_drawdown)
+    if dd_spy is not None:
+        components["SPY 하락률"] = clip_score(100.0 + dd_spy * 200.0)
+
+    # 200일선 대비 위치: 0% → 50점, +20% → 100점, -20% → 0점
+    ma_dist = _to_float_or_none(spy_ma_distance)
+    if ma_dist is not None:
+        components["SPY 200일선"] = clip_score(50.0 + ma_dist * 250.0)
+
+    # VIX 레벨: 10 → 100점, 40 → 0점 (낮을수록 탐욕)
+    vix = _to_float_or_none(vix_level)
+    if vix is not None:
+        components["VIX"] = clip_score(100.0 - (vix - 10.0) * (100.0 / 30.0))
+
+    valid = {k: v for k, v in components.items() if v is not None}
+    if not valid:
+        return {"score": None, "components": {}}
+
+    score = sum(valid.values()) / len(valid)
+    return {"score": clip_score(score), "components": valid}
+
+
+def _is_score_value(value) -> bool:
+    """0~100 범위의 점수 후보 숫자인지 판별한다 (bool 제외)."""
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, (int, float)):
+        numeric = float(value)
+        if numeric != numeric:  # NaN
+            return False
+        return 0.0 <= numeric <= 100.0
+    return False
+
+
+def find_score_in_payload(
+    payload,
+    preferred_keys=("score", "value", "now", "current", "rating_value"),
+    max_depth: int = 6,
+):
+    """JSON 유사 구조에서 0~100 사이의 점수 값을 방어적으로 재귀 탐색한다.
+
+    우선 키(score/value/current/now 등)를 먼저 확인하고, 없으면 중첩 구조를
+    재귀 탐색한다. 응답 구조가 바뀌어도 동작하도록 만든 폴백용 헬퍼이며,
+    찾지 못하면 None 을 반환한다.
+    """
+
+    def _search(obj, depth):
+        if depth > max_depth:
+            return None
+        if isinstance(obj, dict):
+            # 1) 우선 키가 직접 점수 값을 가지면 즉시 반환
+            for key in preferred_keys:
+                if key in obj and _is_score_value(obj[key]):
+                    return float(obj[key])
+            # 2) 우선 키의 중첩 구조를 먼저 탐색
+            for key in preferred_keys:
+                if key in obj and isinstance(obj[key], (dict, list)):
+                    found = _search(obj[key], depth + 1)
+                    if found is not None:
+                        return found
+            # 3) 나머지 값을 재귀 탐색
+            for nested in obj.values():
+                if isinstance(nested, (dict, list)):
+                    found = _search(nested, depth + 1)
+                    if found is not None:
+                        return found
+            return None
+        if isinstance(obj, list):
+            for item in obj:
+                if isinstance(item, (dict, list)):
+                    found = _search(item, depth + 1)
+                    if found is not None:
+                        return found
+            return None
+        return None
+
+    return _search(payload, 0)
