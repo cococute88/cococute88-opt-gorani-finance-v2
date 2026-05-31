@@ -452,10 +452,10 @@ g_main, g_side = st.columns([1.3, 1])
 with g_main:
     if gorani_score is not None:
         st.plotly_chart(
-            build_sentiment_gauge(gorani_score, "고라니 시장온도"),
+            build_sentiment_gauge(gorani_score, "고라니 시장온도 v1"),
             use_container_width=True,
         )
-        st.caption(f"상태: {classify_fear_greed_score(gorani_score)}")
+        st.caption(f"상태: {classify_fear_greed_score(gorani_score)} (v1 구버전 참고 지표)")
     else:
         st.info("시장 심리 점수를 산출할 데이터가 아직 없습니다.")
 
@@ -467,10 +467,10 @@ with g_main:
         unsafe_allow_html=True,
     )
 
-    # 자체 지표 설명 및 한계 안내
+    # 자체 지표 설명 및 한계 안내 (v1 은 구버전 참고 지표임을 명확히 표시)
     st.caption(
-        "고라니 시장온도는 자체 계산 지표이며, CNN Fear & Greed 공식값과 다를 수 있습니다. "
-        "현재 v1은 RSI·고점대비 하락률·VIX 등 가격·변동성 중심 지표입니다."
+        "v1은 RSI·고점대비 하락률·VIX 중심의 구버전 참고 지표입니다. 상승장에서는 과도하게 높게 나올 수 있습니다. "
+        "개선 중인 v2는 아래 진단 버튼으로 확인할 수 있습니다."
     )
     st.markdown(
         "<div style='font-size:13px;'>🔗 "
@@ -507,49 +507,6 @@ if gorani["components"]:
         )
 
 st.markdown("<hr style='border:0; border-top:1px solid #F2F4F6;'>", unsafe_allow_html=True)
-
-
-# ──────────────────────────────────────────────
-# 4-2. RSI 14 / 고점 대비 하락률 (기존 MVP 유지)
-# ──────────────────────────────────────────────
-if closes:
-    rsi_view = {t: _slice_recent(s, lookback) for t, s in rsi_full.items()}
-    dd_view = {t: _slice_recent(s, lookback) for t, s in dd_full.items()}
-
-    # ── 현재 RSI 14 카드 ──
-    st.markdown("#### 현재 RSI 14")
-    rsi_cols = st.columns(len(WATCHLIST))
-    for col, ticker in zip(rsi_cols, WATCHLIST):
-        value = _last_valid(rsi_full.get(ticker))
-        if value is None:
-            col.metric(ticker, "N/A")
-        else:
-            if value >= 70:
-                state = "과매수"
-            elif value <= 30:
-                state = "과매도"
-            else:
-                state = "중립"
-            col.metric(ticker, f"{value:.1f}", help=f"현재 상태: {state}")
-
-    st.plotly_chart(build_rsi_chart(rsi_view), use_container_width=True)
-
-    # ── 현재 고점 대비 하락률 카드 ──
-    st.markdown("#### 현재 고점 대비 하락률")
-    dd_cols = st.columns(len(WATCHLIST))
-    for col, ticker in zip(dd_cols, WATCHLIST):
-        value = _last_valid(dd_full.get(ticker))
-        if value is None:
-            col.metric(ticker, "N/A")
-        else:
-            col.metric(ticker, f"{value:.1%}")
-
-    st.plotly_chart(build_drawdown_chart(dd_view), use_container_width=True)
-
-    st.caption(
-        "ℹ️ RSI 14 는 Wilder 방식으로 직접 계산하며, 70 이상은 과매수·30 이하는 과매도 신호로 해석합니다. "
-        "고점 대비 하락률은 표시 구간 이전을 포함한 전체 고점 기준입니다."
-    )
 
 
 # ──────────────────────────────────────────────
@@ -645,6 +602,7 @@ with st.expander("🔬 고라니 시장온도 v2 진단 보기", expanded=False)
         col_info.metric("유효 구성요소", f"{v2_avail} / 7", help=f"최소 필요: {v2_min}개")
 
         st.caption(f"v2 상태: **{v2_status}** · 유효 {v2_avail}/{v2_min}개 이상 필요")
+        st.caption("ℹ️ v2는 아직 검증 단계라 메인 게이지에는 반영하지 않습니다.")
 
         # 실패 원인 안내
         if v2_status == "insufficient_data":
@@ -716,6 +674,52 @@ with st.expander("🔬 고라니 시장온도 v2 진단 보기", expanded=False)
 
         # 배포 반영 확인용 버전 마커 (하단)
         st.caption("v2 diagnostics UI: lazy-v1")
+
+
+st.markdown("<hr style='border:0; border-top:1px solid #F2F4F6;'>", unsafe_allow_html=True)
+
+
+# ──────────────────────────────────────────────
+# 4-2. RSI 14 / 고점 대비 하락률 (기존 MVP 유지) — v2 진단 아래로 이동
+# ──────────────────────────────────────────────
+if closes:
+    rsi_view = {t: _slice_recent(s, lookback) for t, s in rsi_full.items()}
+    dd_view = {t: _slice_recent(s, lookback) for t, s in dd_full.items()}
+
+    # ── 현재 RSI 14 카드 ──
+    st.markdown("#### 현재 RSI 14")
+    rsi_cols = st.columns(len(WATCHLIST))
+    for col, ticker in zip(rsi_cols, WATCHLIST):
+        value = _last_valid(rsi_full.get(ticker))
+        if value is None:
+            col.metric(ticker, "N/A")
+        else:
+            if value >= 70:
+                state = "과매수"
+            elif value <= 30:
+                state = "과매도"
+            else:
+                state = "중립"
+            col.metric(ticker, f"{value:.1f}", help=f"현재 상태: {state}")
+
+    st.plotly_chart(build_rsi_chart(rsi_view), use_container_width=True)
+
+    # ── 현재 고점 대비 하락률 카드 ──
+    st.markdown("#### 현재 고점 대비 하락률")
+    dd_cols = st.columns(len(WATCHLIST))
+    for col, ticker in zip(dd_cols, WATCHLIST):
+        value = _last_valid(dd_full.get(ticker))
+        if value is None:
+            col.metric(ticker, "N/A")
+        else:
+            col.metric(ticker, f"{value:.1%}")
+
+    st.plotly_chart(build_drawdown_chart(dd_view), use_container_width=True)
+
+    st.caption(
+        "ℹ️ RSI 14 는 Wilder 방식으로 직접 계산하며, 70 이상은 과매수·30 이하는 과매도 신호로 해석합니다. "
+        "고점 대비 하락률은 표시 구간 이전을 포함한 전체 고점 기준입니다."
+    )
 
 
 # 캐시 초기화 (시세/심리 데이터가 일시적으로 비어 있을 때 수동 갱신용)
