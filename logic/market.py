@@ -415,3 +415,45 @@ def compute_mdd_details(close) -> dict:
         "recovery_date": recovery_date,
         "recovered": recovery_date is not None,
     }
+
+
+
+# ──────────────────────────────────────────────
+# STEP 5: 원화(KRW) 환산 / 날짜 병합 순수 함수
+# ──────────────────────────────────────────────
+def _clean_series_for_merge(series) -> pd.Series:
+    """병합용 정규화: 숫자화·결측제거·중복 인덱스 제거·정렬."""
+    cleaned = _coerce_close(series)
+    if cleaned.empty:
+        return cleaned
+    cleaned = cleaned[~cleaned.index.duplicated(keep="last")]
+    return cleaned.sort_index()
+
+
+def align_and_convert_to_krw(usd_close, usdkrw_rate):
+    """달러 종가를 USD/KRW 환율로 원화 환산한다.
+
+    미국 거래일과 환율 날짜가 다를 수 있으므로, 환율을 (달러+환율) 합집합
+    인덱스에 reindex 후 ``ffill`` 하여 달러 거래일에 맞춘다. (bfill 미사용)
+    시작 구간 환율이 없어 환산 불가한 날은 자동으로 제외(dropna)된다.
+
+    반환: ``(krw_close: Series, aligned_rate: Series)``.
+    환산 가능한 데이터가 없으면 빈 Series 두 개를 반환한다.
+    """
+    usd = _clean_series_for_merge(usd_close)
+    fx = _clean_series_for_merge(usdkrw_rate)
+
+    empty = pd.Series(dtype="float64")
+    if usd.empty or fx.empty:
+        return empty, empty
+
+    combined_index = usd.index.union(fx.index)
+    fx_ffilled = fx.reindex(combined_index).ffill()
+    aligned_rate = fx_ffilled.reindex(usd.index)
+
+    krw_close = (usd * aligned_rate).dropna()
+    if krw_close.empty:
+        return empty, empty
+
+    aligned_rate = aligned_rate.reindex(krw_close.index)
+    return krw_close, aligned_rate

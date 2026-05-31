@@ -7,7 +7,11 @@ from io import StringIO
 from datetime import date, timedelta
 
 from ui.styles import TOSS_CSS
-from logic.market import compute_drawdown_series, compute_mdd_details
+from logic.market import (
+    compute_drawdown_series,
+    compute_mdd_details,
+    align_and_convert_to_krw,
+)
 
 # ──────────────────────────────────────────────
 # 1. 디자인
@@ -108,6 +112,33 @@ def fetch_close_series(ticker: str) -> pd.Series:
     raise ValueError(f"{ticker} 종가 조회 실패 | " + " | ".join(errors))
 
 
+@st.cache_data(ttl=60 * 60 * 6, show_spinner=False)
+def fetch_usdkrw_series() -> pd.Series:
+    """USD/KRW(1달러당 원화) 환율 종가 Series 를 반환한다.
+
+    KRW=X → USDKRW=X 순으로 시도하고, '1달러당 원화' 값이 통상 범위(대략
+    1,000~2,000원대)를 크게 벗어나면 비정상으로 보고 실패 처리한다.
+    (반전/이상치 방지로 700~3,000 허용) 모두 실패 시 예외를 던진다.
+    """
+    errors = []
+    for symbol in ("KRW=X", "USDKRW=X"):
+        try:
+            series = fetch_close_series(symbol).dropna()
+        except Exception as e:
+            errors.append(f"{symbol}: {e}")
+            continue
+        if series.empty:
+            errors.append(f"{symbol}: 데이터 없음")
+            continue
+        latest = float(series.iloc[-1])
+        if not (700.0 <= latest <= 3000.0):
+            errors.append(f"{symbol}: 비정상 환율값 {latest:.4f}")
+            continue
+        return series
+
+    raise ValueError("USD/KRW 환율 조회 실패 | " + " | ".join(errors))
+
+
 # ──────────────────────────────────────────────
 # 3. 표시 헬퍼
 # ──────────────────────────────────────────────
@@ -115,6 +146,12 @@ def _fmt_price(value):
     if value is None:
         return "N/A"
     return f"${value:,.2f}"
+
+
+def _fmt_krw(value):
+    if value is None:
+        return "N/A"
+    return f"₩{value:,.0f}"
 
 
 def _fmt_pct(value):
@@ -242,6 +279,43 @@ def build_drawdown_chart(dd_series: pd.Series, details: dict) -> go.Figure:
     return fig
 
 
+def build_dd_compare_chart(usd_dd: pd.Series, krw_dd: pd.Series) -> go.Figure:
+    fig = go.Figure()
+    if usd_dd is not None and not usd_dd.dropna().empty:
+        fig.add_trace(
+            go.Scatter(
+                x=usd_dd.index, y=usd_dd.values, mode="lines",
+                name="달러 기준", line=dict(color="#3182F6", width=2.0),
+            )
+        )
+    if krw_dd is not None and not krw_dd.dropna().empty:
+        fig.add_trace(
+            go.Scatter(
+                x=krw_dd.index, y=krw_dd.values, mode="lines",
+                name="원화 기준", line=dict(color="#FF8B00", width=2.0),
+            )
+        )
+
+    fig.add_hline(y=0, line=dict(color="#4E5968", width=1.0))
+    for level in (-0.10, -0.20, -0.30, -0.40):
+        fig.add_hline(
+            y=level,
+            line=dict(color="#8B95A1", width=1.0, dash="dot"),
+            annotation_text=f"{level:.0%}",
+            annotation_position="bottom right",
+        )
+
+    fig.update_layout(
+        title=dict(text="달러 vs 원화 Drawdown 비교", font=dict(size=18, color="#191F28")),
+        plot_bgcolor="#FFFFFF", paper_bgcolor="#FFFFFF", hovermode="x unified",
+        margin=dict(l=20, r=20, t=60, b=20),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        xaxis=dict(hoverformat="%Y-%m-%d"),
+        yaxis=dict(tickformat=".0%", hoverformat=".2%"),
+    )
+    return fig
+
+
 # ──────────────────────────────────────────────
 # 5. 화면 및 입력
 # ──────────────────────────────────────────────
@@ -334,10 +408,103 @@ if valid_input:
 
             st.caption(
                 "ℹ️ MDD(최대낙폭) = 기간 내 고점 대비 최대 하락률입니다. "
-                "기준선은 -10% / -20% / -30% / -40% 입니다. 원화 기준 MDD는 다음 단계에서 제공됩니다."
+                "기준선은 -10% / -20% / -30% / -40% 입니다. 아래에 원화 기준 비교를 함께 제공합니다."
             )
 
-# 캐시 초기화 (시세가 일시적으로 비어 있을 때 수동 갱신용)
+            # ──────────────────────────────────────────
+            # 원화(KRW) 기준 MDD — 환율 실패와 무관하게 위 달러 결과는 항상 유지
+            # ──────────────────────────────────────────
+            st.markdown("<hr style='border:0; border-top:1px solid #F2F4F6;'>", unsafe_allow_html=True)
+            st.markdown("### 🇰🇷 원화 기준 MDD (한국 투자자 체감)")
+            st.caption(
+                "원화 기준 MDD는 달러 종가에 USD/KRW 환율을 곱해 계산한 한국 투자자 체감 기준입니다. "
+                "환율 효과 때문에 달러 기준 MDD와 다를 수 있으며, 공식 금융사이트의 달러 기준 MDD와 다를 수 있습니다."
+            )
+
+            fx_full = None
+            fx_failed = False
+            fx_error = ""
+            try:
+                fx_full = fetch_usdkrw_series()
+            except Exception as e:
+                fx_failed = True
+                fx_error = str(e)
+
+            if fx_failed or fx_full is None or fx_full.empty:
+                st.warning(
+                    "⚠️ USD/KRW 환율을 불러오지 못해 원화 기준 분석을 생략합니다. "
+                    "위 달러 기준 결과/그래프는 그대로 유효합니다."
+                )
+                if fx_error:
+                    st.caption(f"상세: {fx_error}")
+            else:
+                krw_window, aligned_rate = align_and_convert_to_krw(window, fx_full)
+
+                if krw_window.empty or len(krw_window) < 2:
+                    st.warning(
+                        "⚠️ 선택 구간에 유효한 환율 데이터가 부족하여 원화 기준 분석을 생략합니다. "
+                        "기간을 조정하거나 잠시 후 다시 시도해주세요. (달러 기준 결과는 위에 유지됩니다.)"
+                    )
+                else:
+                    krw_details = compute_mdd_details(krw_window)
+                    krw_dd = compute_drawdown_series(krw_window)
+
+                    # 적용 환율 정보 카드
+                    latest_rate = _price_at(aligned_rate, aligned_rate.index.max())
+                    rate_date = _fmt_date(aligned_rate.index.max())
+                    fx1, fx2 = st.columns(2)
+                    fx1.metric(
+                        "적용 USD/KRW (최신)",
+                        f"{latest_rate:,.2f}원" if latest_rate is not None else "N/A",
+                        help=f"환율 기준일: {rate_date}",
+                    )
+                    fx2.metric(
+                        "원화 환산 데이터", f"{len(krw_window)}일",
+                        help="달러 거래일에 환율을 reindex 후 ffill 정렬하여 환산했습니다.",
+                    )
+
+                    # 달러/원화 비교 표
+                    compare_df = pd.DataFrame(
+                        {
+                            "달러 기준": [
+                                _fmt_price(details["current_price"]),
+                                _fmt_price(details["period_high"]),
+                                _fmt_pct(details["current_drawdown"]),
+                                _fmt_pct(details["mdd"]),
+                                _fmt_date(details["peak_date"]),
+                                _fmt_date(details["trough_date"]),
+                                _fmt_date(details["recovery_date"]) if details["recovered"] else "미회복",
+                            ],
+                            "원화 기준": [
+                                _fmt_krw(krw_details["current_price"]),
+                                _fmt_krw(krw_details["period_high"]),
+                                _fmt_pct(krw_details["current_drawdown"]),
+                                _fmt_pct(krw_details["mdd"]),
+                                _fmt_date(krw_details["peak_date"]),
+                                _fmt_date(krw_details["trough_date"]),
+                                _fmt_date(krw_details["recovery_date"]) if krw_details["recovered"] else "미회복",
+                            ],
+                        },
+                        index=[
+                            "현재가", "기간 내 최고가", "현재 고점대비 하락률",
+                            "최대 MDD", "MDD 고점일", "MDD 저점일", "회복일",
+                        ],
+                    )
+                    st.table(compare_df)
+
+                    # 달러/원화 drawdown 비교차트 (가격은 단위가 달라 중첩하지 않음)
+                    st.plotly_chart(
+                        build_dd_compare_chart(dd_series, krw_dd),
+                        use_container_width=True,
+                    )
+
+                    st.caption(
+                        "ℹ️ 비교 핵심은 drawdown 입니다. 하락장에서 원화가 약세(환율 상승)면 원화 기준 낙폭이 "
+                        "달러 기준보다 작아질 수 있고, 원화가 강세면 더 커질 수 있습니다."
+                    )
+
+# 캐시 초기화 (시세/환율이 일시적으로 비어 있을 때 수동 갱신용)
 if st.button("🔄 시세 캐시 초기화", use_container_width=True):
     fetch_close_series.clear()
+    fetch_usdkrw_series.clear()
     st.rerun()
