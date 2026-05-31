@@ -169,10 +169,12 @@ def _last_valid(series: pd.Series):
 
 @st.cache_data(ttl=60 * 30, show_spinner=False)
 def fetch_cnn_fear_greed():
-    """CNN Fear & Greed 현재값(0~100)을 requests 로 직접 조회한다.
+    """CNN Fear & Greed 값을 requests 로 직접 조회하고 진단 정보를 함께 반환한다.
 
-    응답 구조 변경에 대비해 점수를 재귀 탐색하며, 실패 시 None 을 반환하여
-    페이지가 죽지 않도록 한다. (별도 패키지 미사용)
+    반환 dict 키: score, ok, source, status_code, error, content_type, preview.
+    실패해도 예외를 던지지 않고 ok=False 인 dict 를 반환해 페이지가 죽지 않게 한다.
+    error 코드: timeout / http_<code> / json_parse / no_score / request_exception.
+    응답 구조 변경에 대비해 점수는 find_score_in_payload 로 방어적으로 탐색한다.
     """
     url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
     headers = {
@@ -180,34 +182,122 @@ def fetch_cnn_fear_greed():
         "Accept": "application/json, text/plain, */*",
         "Referer": "https://edition.cnn.com/markets/fear-and-greed",
     }
+    result = {
+        "score": None,
+        "ok": False,
+        "source": "cnn",
+        "status_code": None,
+        "error": None,
+        "content_type": None,
+        "preview": "",
+    }
+
     try:
         response = requests.get(url, headers=headers, timeout=10)
-        response.raise_for_status()
+    except requests.exceptions.Timeout:
+        result["error"] = "timeout"
+        return result
+    except requests.exceptions.RequestException as exc:
+        result["error"] = "request_exception"
+        result["preview"] = str(exc)[:200]
+        return result
+
+    result["status_code"] = response.status_code
+    result["content_type"] = response.headers.get("Content-Type", "")
+    # response preview 는 앞 200자 이내로만 (HTML 전체 출력 방지)
+    result["preview"] = (response.text or "")[:200]
+
+    if response.status_code != 200:
+        result["error"] = f"http_{response.status_code}"
+        return result
+
+    try:
         data = response.json()
     except Exception:
-        return None
+        result["error"] = "json_parse"
+        return result
 
-    # 1) 알려진 경로 우선 시도
+    score = None
     try:
         fg = data.get("fear_and_greed") if isinstance(data, dict) else None
         if isinstance(fg, dict):
             score = find_score_in_payload(fg)
-            if score is not None:
-                return float(score)
+        if score is None:
+            score = find_score_in_payload(data)
     except Exception:
-        pass
+        score = None
 
-    # 2) 전체 구조 재귀 탐색 폴백
-    try:
-        score = find_score_in_payload(data)
-        return float(score) if score is not None else None
-    except Exception:
-        return None
+    if score is None:
+        result["error"] = "no_score"
+        return result
+
+    result["score"] = float(score)
+    result["ok"] = True
+    return result
 
 
 # ──────────────────────────────────────────────
 # 3. 차트
 # ──────────────────────────────────────────────
+# 시장 심리 게이지(속도계) 구간 — 앱 톤에 맞춘 연한 색상
+GAUGE_STEPS = [
+    {"range": [0, 25], "color": "#FDECEA"},    # 극단적 공포 (연빨강)
+    {"range": [25, 45], "color": "#FFF3E0"},   # 공포 (연주황)
+    {"range": [45, 55], "color": "#F2F4F6"},   # 중립 (연회색)
+    {"range": [55, 75], "color": "#E8F3FF"},   # 탐욕 (연파랑)
+    {"range": [75, 100], "color": "#E5F6ED"},  # 극단적 탐욕 (연초록)
+]
+
+
+def build_sentiment_gauge(score, title: str, height: int = 300) -> go.Figure:
+    """0~100 점수를 속도계(게이지) 형태로 표시하는 Plotly Indicator 를 만든다.
+
+    score 가 None/NaN/비정상이어도 예외 없이 0 으로 처리한 figure 를 반환한다.
+    """
+    safe = 0.0
+    try:
+        if score is not None:
+            safe = float(score)
+            if safe != safe:  # NaN
+                safe = 0.0
+    except (TypeError, ValueError):
+        safe = 0.0
+    safe = max(0.0, min(100.0, safe))
+
+    fig = go.Figure(
+        go.Indicator(
+            mode="gauge+number",
+            value=safe,
+            number={"font": {"size": 34, "color": "#191F28"}},
+            title={"text": title, "font": {"size": 15, "color": "#4E5968"}},
+            gauge={
+                "axis": {
+                    "range": [0, 100],
+                    "tickwidth": 1,
+                    "tickcolor": "#8B95A1",
+                    "tickvals": [0, 25, 45, 55, 75, 100],
+                },
+                "bar": {"color": "rgba(25,31,40,0.72)", "thickness": 0.28},
+                "bgcolor": "#FFFFFF",
+                "borderwidth": 0,
+                "steps": GAUGE_STEPS,
+                "threshold": {
+                    "line": {"color": "#191F28", "width": 3},
+                    "thickness": 0.75,
+                    "value": safe,
+                },
+            },
+        )
+    )
+    fig.update_layout(
+        height=height,
+        margin=dict(l=20, r=20, t=50, b=10),
+        paper_bgcolor="#FFFFFF",
+        font={"color": "#191F28"},
+    )
+    return fig
+
+
 def build_rsi_chart(rsi_map: dict) -> go.Figure:
     fig = go.Figure()
     for ticker, rsi_series in rsi_map.items():
@@ -309,7 +399,7 @@ dd_full = {t: compute_drawdown_series(s) for t, s in closes.items()}
 # ──────────────────────────────────────────────
 # 4-1. 시장 심리 요약 (CNN Fear & Greed / 고라니 시장온도 / VIX)
 # ──────────────────────────────────────────────
-cnn_value = fetch_cnn_fear_greed()
+cnn = fetch_cnn_fear_greed()
 
 vix_value = None
 vix_failed = False
@@ -332,26 +422,33 @@ gorani = compute_gorani_market_temperature(
 gorani_score = gorani["score"]
 
 st.markdown("#### 시장 심리 요약")
-sent1, sent2, sent3 = st.columns(3)
 
-with sent1:
-    if cnn_value is not None:
-        st.metric("CNN Fear & Greed", f"{cnn_value:.0f}")
-        st.caption(f"상태: {classify_fear_greed_score(cnn_value)}")
+cnn_score = cnn["score"] if cnn.get("ok") else None
+
+# 메인 게이지: CNN 성공 시 CNN, 실패 시 고라니 시장온도를 메인으로
+if cnn_score is not None:
+    main_title, main_value = "CNN Fear & Greed", cnn_score
+else:
+    main_title, main_value = "고라니 시장온도", gorani_score
+
+g_main, g_side = st.columns([1.3, 1])
+
+with g_main:
+    if main_value is not None:
+        st.plotly_chart(build_sentiment_gauge(main_value, main_title), use_container_width=True)
+        st.caption(f"상태: {classify_fear_greed_score(main_value)}")
     else:
-        st.metric("CNN Fear & Greed", "N/A")
-        st.caption("호출 실패 · 고라니 시장온도로 대체")
+        st.info("시장 심리 점수를 산출할 데이터가 아직 없습니다.")
 
-with sent2:
-    if gorani_score is not None:
-        primary = " (주요 지표)" if cnn_value is None else ""
-        st.metric("고라니 시장온도", f"{gorani_score:.0f}")
-        st.caption(f"상태: {classify_fear_greed_score(gorani_score)}{primary}")
-    else:
-        st.metric("고라니 시장온도", "N/A")
-        st.caption("산출 가능한 지표 없음")
-
-with sent3:
+with g_side:
+    # CNN 성공 시 고라니 시장온도를 보조 게이지로 함께 표시
+    if cnn_score is not None and gorani_score is not None:
+        st.plotly_chart(
+            build_sentiment_gauge(gorani_score, "고라니 시장온도 (보조)", height=260),
+            use_container_width=True,
+        )
+        st.caption(f"상태: {classify_fear_greed_score(gorani_score)}")
+    # VIX 보조 카드 (항상 표시)
     if vix_value is not None:
         st.metric("현재 VIX", f"{vix_value:.1f}")
         st.caption("참고: VIX가 높을수록 시장 불안 심리가 큼")
@@ -359,8 +456,23 @@ with sent3:
         st.metric("현재 VIX", "N/A")
         st.caption("VIX 조회 실패")
 
-if cnn_value is None and gorani_score is not None:
-    st.info("ℹ️ CNN Fear & Greed 호출에 실패하여 자체 **고라니 시장온도**를 주요 지표로 표시합니다.")
+# CNN 실패: 부드러운 안내 + 진단 정보 expander
+if cnn_score is None:
+    st.info("CNN 값은 현재 불러오지 못해 자체 고라니 시장온도를 기준으로 표시합니다.")
+    st.caption(f"CNN Fear & Greed 호출 실패: {cnn.get('error') or 'unknown'}")
+    with st.expander("CNN 호출 진단 정보 보기", expanded=False):
+        st.write(
+            {
+                "status_code": cnn.get("status_code"),
+                "error": cnn.get("error"),
+                "content_type": cnn.get("content_type"),
+            }
+        )
+        preview = (cnn.get("preview") or "")[:200]
+        if preview:
+            st.caption("response preview (앞 200자 이내):")
+            st.code(preview)
+
 if vix_failed:
     st.warning("⚠️ VIX(^VIX) 조회에 실패했습니다. 나머지 지표는 정상 표시됩니다.")
 
