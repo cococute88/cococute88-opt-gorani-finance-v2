@@ -1,9 +1,12 @@
+import time
+import traceback
+from io import StringIO
+
 import streamlit as st
 import pandas as pd
 import yfinance as yf
 import plotly.graph_objects as go
 import requests
-from io import StringIO
 
 from ui.styles import TOSS_CSS
 from logic.market import (
@@ -129,6 +132,96 @@ def fetch_close_series(ticker: str) -> pd.Series:
         errors.append(f"Stooq CSV 실패: {e}")
 
     raise ValueError(f"{ticker} 종가 조회 실패 | " + " | ".join(errors))
+
+
+@st.cache_data(ttl=60 * 60 * 6, show_spinner=False)
+def compute_v2_diagnostics(try_pcr: bool = False) -> dict:
+    """고라니 시장온도 v2 진단을 계산한다 (lazy / 캐시 6시간).
+
+    페이지 로드 시 자동 실행되지 않고, 사용자가 'v2 진단 계산하기' 버튼을
+    눌렀을 때만 호출되어야 한다. 각 티커 조회는 개별적으로 격리되어 하나가
+    실패해도 나머지 계산은 계속 진행되며, 전체 페이지를 죽이지 않는다.
+
+    Args:
+        try_pcr: True 이면 ^CPC → ^CPCE 직접 조회를 추가로 시도한다.
+                 False(기본)면 ^CPC/^CPCE 는 조회하지 않고, Put/Call 구성요소는
+                 VIX/VIX3M proxy 로만 산출한다.
+
+    Returns:
+        dict: {
+            "result": v2 계산 결과 dict (compute_gorani_market_temperature_v2 반환) 또는 None,
+            "ticker_ok": 성공한 티커 list,
+            "ticker_errors": {티커: 오류문자열} dict,
+            "elapsed": 계산 소요 시간(초, float),
+            "error": 전체 예외 traceback 문자열 또는 None,
+            "used_pcr_direct": ^CPC/^CPCE 직접 데이터를 실제로 사용했는지(bool),
+            "putcall_source": Put/Call 구성요소가 실제 사용한 소스 문자열,
+        }
+    """
+    start = time.perf_counter()
+    ticker_ok = []
+    ticker_errors = {}
+    error = None
+    result = None
+    used_pcr_direct = False
+    putcall_source = None
+
+    # 기본 티커: SPY/^VIX 는 v1 에서 이미 캐시되어 재호출이 캐시 히트로 빠르다.
+    # v2 전용 추가 티커는 RSP/HYG/LQD/TLT/^VIX3M 만 조회한다.
+    base_tickers = ["SPY", "^VIX", "RSP", "HYG", "LQD", "TLT", "^VIX3M"]
+    # ^CPC/^CPCE 직접 조회는 try_pcr=True 일 때만 수행한다 (기본 비활성화).
+    pcr_tickers = ["^CPC", "^CPCE"] if try_pcr else []
+
+    raw = {}
+    for tk in base_tickers + pcr_tickers:
+        try:
+            series = fetch_close_series(tk)
+            if series is not None and not series.empty:
+                raw[tk] = series
+                ticker_ok.append(tk)
+            else:
+                raw[tk] = None
+                ticker_errors[tk] = "빈 데이터 반환"
+        except Exception as exc:  # noqa: BLE001 - 개별 티커 실패 격리
+            raw[tk] = None
+            ticker_errors[tk] = str(exc)[:120]
+
+    # Put/Call 직접 데이터: try_pcr=True 일 때만 ^CPC → ^CPCE 순으로 사용.
+    pcr_series = None
+    if try_pcr:
+        pcr_series = raw.get("^CPC")
+        if pcr_series is None:
+            pcr_series = raw.get("^CPCE")
+        used_pcr_direct = pcr_series is not None and not pcr_series.empty
+
+    try:
+        result = compute_gorani_market_temperature_v2(
+            spy_close=raw.get("SPY"),
+            rsp_close=raw.get("RSP"),
+            hyg_close=raw.get("HYG"),
+            lqd_close=raw.get("LQD"),
+            tlt_close=raw.get("TLT"),
+            vix_close=raw.get("^VIX"),
+            pcr_close=pcr_series,  # None 이면 logic 내부에서 VIX/VIX3M proxy 사용
+            vix3m_close=raw.get("^VIX3M"),
+            min_components=5,
+        )
+        comp = (result or {}).get("components") or {}
+        putcall = comp.get("Put/Call") or {}
+        putcall_source = putcall.get("tickers")
+    except Exception:  # noqa: BLE001 - v2 진단은 절대 페이지를 막지 않음
+        error = traceback.format_exc()
+
+    elapsed = time.perf_counter() - start
+    return {
+        "result": result,
+        "ticker_ok": ticker_ok,
+        "ticker_errors": ticker_errors,
+        "elapsed": elapsed,
+        "error": error,
+        "used_pcr_direct": used_pcr_direct,
+        "putcall_source": putcall_source,
+    }
 
 
 def load_watchlist(tickers):
@@ -459,180 +552,169 @@ if closes:
 
 
 # ──────────────────────────────────────────────
-# 4-3. 고라니 시장온도 v2 (진단용) — 완전 격리. 실패해도 위 화면은 유지됨.
+# 4-3. 고라니 시장온도 v2 (진단용) — lazy 계산. 버튼을 눌렀을 때만 계산한다.
 #      v2 는 아직 메인 게이지에 연결하지 않는다 (검증 단계).
+#      st.expander 는 접혀 있어도 내부 코드가 실행되므로, 무거운 fetch 는
+#      반드시 버튼 + st.session_state 조건으로만 호출되도록 격리한다.
 # ──────────────────────────────────────────────
 with st.expander("🔬 고라니 시장온도 v2 진단 보기", expanded=False):
     # ──────────────────────────────────────────
-    # A. 항상 먼저 보이는 블록 (네트워크/계산 이전에 즉시 렌더)
-    #    → 무거운 fetch 가 느려도 이 블록은 반드시 화면에 보인다.
+    # A. 항상 표시되는 블록 (네트워크/계산 이전에 즉시 렌더)
     # ──────────────────────────────────────────
-    st.caption("✅ 진단 블록 렌더링됨 (v2 diagnostics UI: force-show-v1)")
+    st.caption("✅ 진단 블록 렌더링됨 (v2 diagnostics UI: lazy-v1)")
     st.caption(
         "v2는 CNN Fear & Greed의 7요소 철학을 참고한 진단용 자체 지표입니다. "
-        "현재는 검증 단계이므로 메인 게이지에는 아직 반영하지 않습니다."
+        "현재는 검증 단계이므로 메인 게이지에는 아직 반영하지 않습니다. "
+        "아래 버튼을 눌러야만 계산하며, 페이지 로딩 시에는 자동으로 계산하지 않습니다."
     )
 
-    # 상태 추적 변수 (try 밖에서 초기화 → 이후 무조건 렌더에 사용)
-    v2_result = None
-    v2_attempted = False
-    v2_last_error = None
-    v2_ticker_errors = {}
-    v2_ticker_ok = []
+    # 실험적 직접 조회 옵션 (기본 False → ^CPC/^CPCE 는 조회하지 않음)
+    v2_try_pcr = st.checkbox(
+        "실험적으로 ^CPC/^CPCE 직접 조회 시도",
+        value=False,
+        key="v2_try_pcr",
+        help="체크하지 않으면 Put/Call 은 VIX/VIX3M proxy 만 사용합니다 (권장).",
+    )
+
+    v2_btn_col1, v2_btn_col2 = st.columns(2)
+    v2_run = v2_btn_col1.button(
+        "📊 v2 진단 계산하기", use_container_width=True, key="v2_run_btn"
+    )
+    v2_clear = v2_btn_col2.button(
+        "🧹 v2 진단 캐시 초기화", use_container_width=True, key="v2_clear_btn"
+    )
 
     # ──────────────────────────────────────────
-    # 계산 (무거운 fetch 는 spinner 로 감싸고, 예외/결과를 변수에만 저장)
+    # B. 캐시 초기화 버튼
     # ──────────────────────────────────────────
-    with st.spinner("v2 진단 계산 중... (신규 티커 조회는 처음엔 느릴 수 있습니다)"):
-        try:
-            v2_attempted = True
-            v2_raw = {}
-            for _tk in ("RSP", "HYG", "LQD", "TLT", "^CPC", "^CPCE", "^VIX3M"):
-                try:
-                    _res = fetch_close_series(_tk)
-                    if _res is not None and not _res.empty:
-                        v2_raw[_tk] = _res
-                        v2_ticker_ok.append(_tk)
-                    else:
-                        v2_raw[_tk] = None
-                        v2_ticker_errors[_tk] = "빈 데이터 반환"
-                except Exception as _exc:  # noqa: BLE001 - 개별 티커 실패 격리
-                    v2_raw[_tk] = None
-                    v2_ticker_errors[_tk] = str(_exc)[:120]
-
-            pcr_series = v2_raw.get("^CPC")
-            if pcr_series is None:
-                pcr_series = v2_raw.get("^CPCE")
-
-            v2_result = compute_gorani_market_temperature_v2(
-                spy_close=closes.get("SPY"),
-                rsp_close=v2_raw.get("RSP"),
-                hyg_close=v2_raw.get("HYG"),
-                lqd_close=v2_raw.get("LQD"),
-                tlt_close=v2_raw.get("TLT"),
-                vix_close=vix_series,
-                pcr_close=pcr_series,
-                vix3m_close=v2_raw.get("^VIX3M"),
-                min_components=5,
-            )
-        except Exception:  # noqa: BLE001 - v2 진단은 절대 페이지를 막지 않음
-            import traceback
-            v2_last_error = traceback.format_exc()
+    if v2_clear:
+        compute_v2_diagnostics.clear()
+        st.session_state.pop("v2_diag", None)
+        st.info("v2 진단 캐시를 초기화했습니다. '계산하기'를 다시 누르면 새로 계산합니다.")
 
     # ──────────────────────────────────────────
-    # B. 상태 요약 — try 밖, 무조건 렌더 (조건문에 갇히지 않음)
+    # C. 계산 버튼 — 오직 이 분기에서만 무거운 fetch/계산이 실행된다.
     # ──────────────────────────────────────────
-    safe_result = v2_result if isinstance(v2_result, dict) else {}
-    comp_data = safe_result.get("components") or {}
-    v2_score = safe_result.get("score")
-    if not v2_attempted:
-        v2_status = "not_run"
-    elif v2_last_error is not None:
-        v2_status = "error"
+    if v2_run:
+        with st.spinner("v2 진단 계산 중... (신규 티커 조회는 처음엔 느릴 수 있습니다)"):
+            st.session_state["v2_diag"] = compute_v2_diagnostics(try_pcr=v2_try_pcr)
+
+    diag = st.session_state.get("v2_diag")
+
+    # ──────────────────────────────────────────
+    # D. 결과 렌더 (계산 전이면 안내만, 계산 후이면 상세 표시)
+    # ──────────────────────────────────────────
+    if diag is None:
+        st.info("아직 계산하지 않았습니다. 버튼을 누르면 v2 진단을 계산합니다.")
     else:
-        v2_status = safe_result.get("status", "error")
-    v2_avail = safe_result.get("available_components", 0)
-    v2_min = safe_result.get("min_components", 5)
+        result = diag.get("result") if isinstance(diag.get("result"), dict) else {}
+        comp_data = result.get("components") or {}
+        v2_score = result.get("score")
+        v2_avail = result.get("available_components", 0)
+        v2_min = result.get("min_components", 5)
+        v2_ticker_ok = diag.get("ticker_ok") or []
+        v2_ticker_errors = diag.get("ticker_errors") or {}
+        v2_error = diag.get("error")
+        elapsed = diag.get("elapsed")
 
-    st.markdown("**진단 상태**")
-    st.write(
-        {
-            "v2 계산 시도 여부": "yes" if v2_attempted else "no",
-            "v2 result status": v2_status,
-            "v2 result object 존재 여부": "yes" if v2_result is not None else "no",
-            "구성요소 수": len(comp_data),
-            "성공 티커": ", ".join(v2_ticker_ok) if v2_ticker_ok else "없음",
-            "실패 티커": ", ".join(v2_ticker_errors.keys()) if v2_ticker_errors else "없음",
-            "마지막 오류": "없음" if v2_last_error is None else "있음 (아래 traceback)",
-        }
-    )
-
-    # ──────────────────────────────────────────
-    # C. v1 vs v2 메트릭 — 무조건 렌더
-    # ──────────────────────────────────────────
-    col_v1, col_v2, col_info = st.columns(3)
-    col_v1.metric("현재 메인 v1", f"{gorani_score:.1f}" if gorani_score is not None else "N/A")
-    if v2_status == "ok" and v2_score is not None:
-        col_v2.metric("진단용 v2", f"{v2_score:.1f}", help=f"상태: {safe_result.get('label')}")
-    elif v2_status == "insufficient_data":
-        col_v2.metric("진단용 v2", "데이터 부족")
-    elif v2_status == "not_run":
-        col_v2.metric("진단용 v2", "미실행")
-    else:
-        col_v2.metric("진단용 v2", "오류")
-    col_info.metric("유효 구성요소", f"{v2_avail} / 7", help=f"최소 필요: {v2_min}개")
-
-    st.caption(f"v2 상태: **{v2_status}** · 유효 {v2_avail}/{v2_min}개 이상 필요")
-
-    # ── 실패 원인 안내 ──
-    if v2_status == "insufficient_data":
-        st.info(f"유효 구성요소가 {v2_min}개 미만({v2_avail}개)이라 v2 점수를 산출하지 못했습니다.")
-    elif v2_status == "error":
-        st.warning("v2 계산 중 예외가 발생했습니다. 아래 구성요소 표/Traceback을 확인하세요.")
-
-    if v2_ticker_errors:
-        failed_tks = ", ".join(f"{tk}({err})" for tk, err in v2_ticker_errors.items())
-        st.caption(f"⚠️ 티커 조회 실패: {failed_tks}")
-
-    # ──────────────────────────────────────────
-    # D. 구성요소 7행 표 — 무조건 렌더 (comp_data 비어도 N/A 7행)
-    # ──────────────────────────────────────────
-    comp_rows = []
-    for name in ("Momentum", "Price Strength", "Breadth", "Put/Call",
-                 "Junk Bond", "Volatility", "Safe Haven"):
-        info = comp_data.get(name, {}) if isinstance(comp_data, dict) else {}
-        raw_val = info.get("raw")
-        score_val = info.get("score")
-        comp_rows.append({
-            "구성요소": name,
-            "사용 티커": info.get("tickers", ""),
-            "raw 최신값": f"{raw_val:.4f}" if isinstance(raw_val, (int, float)) else "N/A",
-            "score (0~100)": f"{score_val:.1f}" if isinstance(score_val, (int, float)) else "N/A",
-            "상태": info.get("status", "na"),
-            "note": "" if info else "데이터 없음",
-        })
-    st.dataframe(pd.DataFrame(comp_rows), use_container_width=True, hide_index=True)
-
-    st.caption(
-        "각 구성요소는 과거 252거래일 대비 rolling percentile rank(0~100)로 점수화합니다. "
-        "공포 방향 지표(Put/Call, Volatility)는 100−분위로 반전합니다."
-    )
-
-    # ──────────────────────────────────────────
-    # E. Traceback (있을 때) — 무조건 렌더
-    # ──────────────────────────────────────────
-    if v2_last_error:
-        st.markdown("**오류 Traceback (마지막 800자)**")
-        st.code(v2_last_error[-800:])
-
-    # ──────────────────────────────────────────
-    # F. 원시 v2 result dict 보기 — 무조건 렌더
-    # ──────────────────────────────────────────
-    with st.expander("🔧 원시 v2 result 보기", expanded=False):
-        if v2_result is None:
-            st.write("v2_result is None")
+        if v2_error is not None:
+            v2_status = "error"
         else:
-            try:
-                st.json({
-                    "score": v2_score,
-                    "label": safe_result.get("label"),
-                    "status": safe_result.get("status"),
-                    "available_components": v2_avail,
-                    "min_components": v2_min,
-                    "ticker_ok": v2_ticker_ok,
-                    "ticker_errors": v2_ticker_errors,
-                    "components": {
-                        k: {kk: (vv if isinstance(vv, (int, float, type(None))) else str(vv))
-                            for kk, vv in v.items()}
-                        for k, v in comp_data.items()
-                    } if comp_data else {},
-                })
-            except Exception as _je:  # noqa: BLE001
-                st.write(f"원시 dict 표시 실패: {_je}")
-                st.write(safe_result)
+            v2_status = result.get("status", "error")
 
-    # 배포 반영 확인용 버전 마커 (하단)
-    st.caption("v2 diagnostics UI: force-show-v1")
+        # 계산 시간 / Put/Call 소스 / 직접 조회 사용 여부
+        elapsed_text = f"{elapsed:.2f}초" if isinstance(elapsed, (int, float)) else "N/A"
+        st.caption(
+            f"⏱ 계산 시간: {elapsed_text} · "
+            f"Put/Call 소스: {diag.get('putcall_source') or 'N/A'} · "
+            f"^CPC/^CPCE 직접 사용: {'예' if diag.get('used_pcr_direct') else '아니오'}"
+        )
+
+        # v1 vs v2 메트릭 (v2 는 진단용 — 메인 게이지에 연결하지 않음)
+        col_v1, col_v2, col_info = st.columns(3)
+        col_v1.metric(
+            "현재 메인 v1", f"{gorani_score:.1f}" if gorani_score is not None else "N/A"
+        )
+        if v2_status == "ok" and v2_score is not None:
+            col_v2.metric("진단용 v2", f"{v2_score:.1f}", help=f"상태: {result.get('label')}")
+        elif v2_status == "insufficient_data":
+            col_v2.metric("진단용 v2", "데이터 부족")
+        else:
+            col_v2.metric("진단용 v2", "오류")
+        col_info.metric("유효 구성요소", f"{v2_avail} / 7", help=f"최소 필요: {v2_min}개")
+
+        st.caption(f"v2 상태: **{v2_status}** · 유효 {v2_avail}/{v2_min}개 이상 필요")
+
+        # 실패 원인 안내
+        if v2_status == "insufficient_data":
+            st.info(f"유효 구성요소가 {v2_min}개 미만({v2_avail}개)이라 v2 점수를 산출하지 못했습니다.")
+        elif v2_status == "error":
+            st.warning("v2 계산 중 예외가 발생했습니다. 아래 구성요소 표/Traceback을 확인하세요.")
+
+        # 구성요소 7행 표 (comp_data 비어도 N/A 7행)
+        comp_rows = []
+        for name in ("Momentum", "Price Strength", "Breadth", "Put/Call",
+                     "Junk Bond", "Volatility", "Safe Haven"):
+            info = comp_data.get(name, {}) if isinstance(comp_data, dict) else {}
+            raw_val = info.get("raw")
+            score_val = info.get("score")
+            comp_rows.append({
+                "구성요소": name,
+                "사용 티커": info.get("tickers", ""),
+                "raw 최신값": f"{raw_val:.4f}" if isinstance(raw_val, (int, float)) else "N/A",
+                "score (0~100)": f"{score_val:.1f}" if isinstance(score_val, (int, float)) else "N/A",
+                "상태": info.get("status", "na"),
+                "note": "" if info else "데이터 없음",
+            })
+        st.dataframe(pd.DataFrame(comp_rows), use_container_width=True, hide_index=True)
+
+        st.caption(
+            "각 구성요소는 과거 252거래일 대비 rolling percentile rank(0~100)로 점수화합니다. "
+            "공포 방향 지표(Put/Call, Volatility)는 100−분위로 반전합니다."
+        )
+
+        # 티커 조회 결과
+        st.caption(
+            f"성공 티커: {', '.join(v2_ticker_ok) if v2_ticker_ok else '없음'}"
+        )
+        if v2_ticker_errors:
+            failed_tks = ", ".join(f"{tk}({err})" for tk, err in v2_ticker_errors.items())
+            st.caption(f"⚠️ 티커 조회 실패: {failed_tks}")
+
+        # 오류 Traceback (있을 때)
+        if v2_error:
+            st.markdown("**오류 Traceback (마지막 800자)**")
+            st.code(v2_error[-800:])
+
+        # 원시 v2 result dict 보기
+        with st.expander("🔧 원시 v2 result 보기", expanded=False):
+            if not result:
+                st.write("v2 result 가 비어 있습니다.")
+            else:
+                try:
+                    st.json({
+                        "score": v2_score,
+                        "label": result.get("label"),
+                        "status": result.get("status"),
+                        "available_components": v2_avail,
+                        "min_components": v2_min,
+                        "elapsed": elapsed,
+                        "used_pcr_direct": diag.get("used_pcr_direct"),
+                        "putcall_source": diag.get("putcall_source"),
+                        "ticker_ok": v2_ticker_ok,
+                        "ticker_errors": v2_ticker_errors,
+                        "components": {
+                            k: {kk: (vv if isinstance(vv, (int, float, type(None))) else str(vv))
+                                for kk, vv in v.items()}
+                            for k, v in comp_data.items()
+                        } if comp_data else {},
+                    })
+                except Exception as _je:  # noqa: BLE001
+                    st.write(f"원시 dict 표시 실패: {_je}")
+                    st.write(result)
+
+        # 배포 반영 확인용 버전 마커 (하단)
+        st.caption("v2 diagnostics UI: lazy-v1")
 
 
 # 캐시 초기화 (시세/심리 데이터가 일시적으로 비어 있을 때 수동 갱신용)
