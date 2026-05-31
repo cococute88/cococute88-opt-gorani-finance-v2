@@ -309,3 +309,109 @@ def find_score_in_payload(
         return None
 
     return _search(payload, 0)
+
+
+
+# ──────────────────────────────────────────────
+# STEP 4: MDD 계산기용 순수 계산 함수
+# ──────────────────────────────────────────────
+def _scalar_at(series, label):
+    """라벨(날짜)에 해당하는 종가를 스칼라 float 로 안전하게 반환한다.
+
+    중복 인덱스로 Series 가 반환되면 첫 값을 사용하고, 실패하면 None.
+    """
+    if series is None or label is None:
+        return None
+    try:
+        value = series.loc[label]
+    except Exception:
+        return None
+    if isinstance(value, pd.Series):
+        if value.empty:
+            return None
+        value = value.iloc[0]
+    return _to_float_or_none(value)
+
+
+def compute_recovery_date(close, peak_date, trough_date):
+    """저점일 이후 가격이 고점일 가격 이상으로 처음 회복한 날짜를 반환한다.
+
+    회복하지 못했거나 계산 불가하면 None 을 반환한다.
+    """
+    series = _coerce_close(close)
+    if series.empty or peak_date is None or trough_date is None:
+        return None
+
+    peak_price = _scalar_at(series, peak_date)
+    if peak_price is None:
+        return None
+
+    after = series.loc[series.index > trough_date]
+    if after.empty:
+        return None
+
+    recovered = after[after >= peak_price]
+    if recovered.empty:
+        return None
+    return recovered.index[0]
+
+
+def compute_mdd_details(close) -> dict:
+    """달러 기준 MDD 분석에 필요한 값들을 한 번에 계산한다.
+
+    반환 키:
+      current_price, period_high, current_drawdown(비율),
+      mdd(비율), peak_date, trough_date, peak_price, trough_price,
+      recovery_date, recovered(bool)
+
+    데이터가 비어 있으면 가격/비율 값은 None, recovered=False.
+    """
+    base = {
+        "current_price": None,
+        "period_high": None,
+        "current_drawdown": None,
+        "mdd": None,
+        "peak_date": None,
+        "trough_date": None,
+        "peak_price": None,
+        "trough_price": None,
+        "recovery_date": None,
+        "recovered": False,
+    }
+
+    series = _coerce_close(close)
+    if series.empty:
+        return base
+
+    current_price = _to_float_or_none(series.iloc[-1])
+    period_high = _to_float_or_none(series.max())
+
+    running_max = series.cummax()
+    last_max = _to_float_or_none(running_max.iloc[-1])
+    current_drawdown = None
+    if current_price is not None and last_max not in (None, 0):
+        current_drawdown = current_price / last_max - 1.0
+
+    mdd_info = compute_mdd(series)
+    peak_date = mdd_info["peak_date"]
+    trough_date = mdd_info["trough_date"]
+
+    peak_price = _scalar_at(series, peak_date)
+    trough_price = _scalar_at(series, trough_date)
+
+    recovery_date = None
+    if peak_date is not None and trough_date is not None:
+        recovery_date = compute_recovery_date(series, peak_date, trough_date)
+
+    return {
+        "current_price": current_price,
+        "period_high": period_high,
+        "current_drawdown": current_drawdown,
+        "mdd": mdd_info["mdd"],
+        "peak_date": peak_date,
+        "trough_date": trough_date,
+        "peak_price": peak_price,
+        "trough_price": trough_price,
+        "recovery_date": recovery_date,
+        "recovered": recovery_date is not None,
+    }

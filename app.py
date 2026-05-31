@@ -273,6 +273,7 @@ if is_authenticated:
         st.Page("pages_app/4_conversion_analysis.py", title="매도전환계산기", icon="🔄"),
         st.Page("pages_app/5_dividend_calendar.py", title="배당 캘린더", icon="📅", default=True),
         st.Page("pages_app/6_market_temperature.py", title="시장온도", icon="🌡️"),
+        st.Page("pages_app/7_mdd_calculator.py", title="MDD 계산기", icon="📉"),
     ]
 
     nav = st.navigation(pages, position="top")
