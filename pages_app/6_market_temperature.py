@@ -11,6 +11,7 @@ from logic.market import (
     compute_drawdown_series,
     compute_distance_from_moving_average,
     compute_gorani_market_temperature,
+    compute_gorani_market_temperature_v2,
     classify_fear_greed_score,
 )
 
@@ -454,6 +455,84 @@ if closes:
         "ℹ️ RSI 14 는 Wilder 방식으로 직접 계산하며, 70 이상은 과매수·30 이하는 과매도 신호로 해석합니다. "
         "고점 대비 하락률은 표시 구간 이전을 포함한 전체 고점 기준입니다."
     )
+
+
+# ──────────────────────────────────────────────
+# 4-3. 고라니 시장온도 v2 (진단용) — 완전 격리. 실패해도 위 화면은 유지됨.
+#      v2 는 아직 메인 게이지에 연결하지 않는다 (검증 단계).
+# ──────────────────────────────────────────────
+with st.expander("🔬 고라니 시장온도 v2 진단 보기", expanded=False):
+    try:
+        st.caption(
+            "v2는 CNN Fear & Greed의 7요소 철학을 참고한 진단용 자체 지표입니다. "
+            "현재는 검증 단계이므로 메인 게이지에는 아직 반영하지 않습니다."
+        )
+
+        # v2 전용 신규 티커 조회 (각각 격리, 실패는 None)
+        v2_raw = {}
+        for _tk in ("RSP", "HYG", "LQD", "TLT", "^CPC", "^CPCE", "^VIX3M"):
+            try:
+                v2_raw[_tk] = fetch_close_series(_tk)
+            except Exception:  # noqa: BLE001 - 개별 티커 실패 격리
+                v2_raw[_tk] = None
+
+        # PCR: ^CPC 우선, 없으면 ^CPCE
+        pcr_series = v2_raw.get("^CPC")
+        if pcr_series is None:
+            pcr_series = v2_raw.get("^CPCE")
+
+        v2 = compute_gorani_market_temperature_v2(
+            spy_close=closes.get("SPY"),
+            rsp_close=v2_raw.get("RSP"),
+            hyg_close=v2_raw.get("HYG"),
+            lqd_close=v2_raw.get("LQD"),
+            tlt_close=v2_raw.get("TLT"),
+            vix_close=(vix_series if not vix_failed else None),
+            pcr_close=pcr_series,
+            vix3m_close=v2_raw.get("^VIX3M"),
+            min_components=5,
+        )
+
+        # v1 vs v2 점수 나란히 표시
+        col_v1, col_v2 = st.columns(2)
+        col_v1.metric("현재 메인 v1", f"{gorani_score:.1f}" if gorani_score is not None else "N/A")
+        if v2.get("status") == "ok" and v2.get("score") is not None:
+            col_v2.metric("진단용 v2", f"{v2['score']:.1f}", help=f"상태: {v2.get('label')}")
+        elif v2.get("status") == "insufficient_data":
+            col_v2.metric("진단용 v2", "데이터 부족",
+                          help=f"유효 {v2.get('available_components')}/{v2.get('min_components')}개")
+        else:
+            col_v2.metric("진단용 v2", "오류")
+
+        st.caption(
+            f"상태: {v2.get('status')} · 유효 구성요소 "
+            f"{v2.get('available_components')}/{v2.get('min_components')}개"
+        )
+
+        # 구성요소별 진단 표
+        comp_rows = []
+        for name, info in (v2.get("components") or {}).items():
+            raw_val = info.get("raw")
+            score_val = info.get("score")
+            comp_rows.append(
+                {
+                    "구성요소": name,
+                    "사용 티커": info.get("tickers", ""),
+                    "raw 최신값": f"{raw_val:.4f}" if isinstance(raw_val, (int, float)) else "N/A",
+                    "score": f"{score_val:.1f}" if isinstance(score_val, (int, float)) else "N/A",
+                    "상태": info.get("status", "na"),
+                }
+            )
+        if comp_rows:
+            st.dataframe(pd.DataFrame(comp_rows), use_container_width=True, hide_index=True)
+
+        st.caption(
+            "각 구성요소는 과거 252거래일 대비 rolling percentile rank(0~100)로 점수화하며, "
+            "공포 방향 지표는 100−분위로 반전합니다. 유효 구성요소가 5개 미만이면 데이터 부족으로 처리합니다."
+        )
+    except Exception as e:  # noqa: BLE001 - v2 진단은 절대 페이지를 막지 않음
+        st.warning(f"v2 진단 계산 중 문제가 발생했습니다(진단 영역만 영향). 상세: {e}")
+
 
 # 캐시 초기화 (시세/심리 데이터가 일시적으로 비어 있을 때 수동 갱신용)
 if st.button("🔄 시세 캐시 초기화", use_container_width=True):
