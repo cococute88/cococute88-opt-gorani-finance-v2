@@ -363,9 +363,18 @@ with g_main:
     else:
         st.info("시장 심리 점수를 산출할 데이터가 아직 없습니다.")
 
-    # CNN 공식값은 서버 차단 이슈로 직접 호출하지 않고 공식 페이지 링크만 제공
+    # 게이지 구간 범례 (모바일에서도 안전한 작은 텍스트)
+    st.markdown(
+        "<div style='font-size:11px; color:#6b7684; text-align:center; margin-top:-8px;'>"
+        "극단적 공포 0–25 · 공포 25–45 · 중립 45–55 · 탐욕 55–75 · 극단적 탐욕 75–100"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+    # 자체 지표 설명 및 한계 안내
     st.caption(
-        "CNN 공식값은 서버 차단 이슈로 앱에서 직접 불러오지 않고, 자체 지표를 기준으로 표시합니다."
+        "고라니 시장온도는 자체 계산 지표이며, CNN Fear & Greed 공식값과 다를 수 있습니다. "
+        "현재 v1은 RSI·고점대비 하락률·VIX 등 가격·변동성 중심 지표입니다."
     )
     st.markdown(
         "<div style='font-size:13px;'>🔗 "
@@ -395,6 +404,10 @@ if gorani["components"]:
         st.caption(
             f"가용 지표 {len(gorani['components'])}개 평균 · {comp_text}. "
             "RSI↑ · 하락폭↓ · 200일선 위 · VIX↓ 일수록 탐욕(점수↑)으로 해석합니다."
+        )
+        st.caption(
+            "ℹ️ 현재 v1은 가격·변동성 중심이라 모멘텀 장세에서 CNN 공식값보다 높게 나올 수 있습니다. "
+            "향후 PCR, 시장폭(RSP/SPY), 신용위험(HYG/LQD), 안전자산 선호(SPY vs TLT)를 반영한 v2로 개선 예정입니다."
         )
 
 st.markdown("<hr style='border:0; border-top:1px solid #F2F4F6;'>", unsafe_allow_html=True)
