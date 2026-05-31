@@ -320,7 +320,7 @@ def build_dd_compare_chart(usd_dd: pd.Series, krw_dd: pd.Series) -> go.Figure:
 # 5. 화면 및 입력
 # ──────────────────────────────────────────────
 st.markdown("# 📉 MDD 계산기")
-st.caption("MDD는 선택한 기간 동안 고점 대비 최대 하락률을 계산합니다. 이번 단계는 달러 기준입니다.")
+st.caption("MDD는 선택한 기간 동안 고점 대비 최대 하락률을 계산합니다. 달러 기준과 원화 환산 기준을 함께 확인할 수 있습니다.")
 
 st.markdown("<hr style='border:0; border-top:1px solid #F2F4F6;'>", unsafe_allow_html=True)
 
