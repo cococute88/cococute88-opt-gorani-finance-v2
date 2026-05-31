@@ -3,6 +3,7 @@ import traceback
 from io import StringIO
 
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import yfinance as yf
 import plotly.graph_objects as go
@@ -721,3 +722,37 @@ with st.expander("🔬 고라니 시장온도 v2 진단 보기", expanded=False)
 if st.button("🔄 시세 캐시 초기화", use_container_width=True):
     fetch_close_series.clear()
     st.rerun()
+
+
+# ──────────────────────────────────────────────
+# 5. 시장온도 참고 시트 (구글 스프레드시트 임베드) — 탭 최하단
+#    - 구글 시트를 iframe 으로 "보기"만 한다 (Google API/secrets/pandas 미사용).
+#    - 시트가 로딩되지 않아도 위 게이지/RSI/하락률/v2 진단 화면은 영향을 받지 않는다.
+# ──────────────────────────────────────────────
+st.markdown("<hr style='border:0; border-top:1px solid #F2F4F6;'>", unsafe_allow_html=True)
+st.markdown("### 📊 시장온도 참고 시트")
+
+# 구글 시트 '웹에 게시 → 삽입(Embed)' URL.
+# HTML 원본의 &amp; 는 Python URL 문자열에서 일반 & 로 사용한다.
+sheet_url = (
+    "https://docs.google.com/spreadsheets/d/e/"
+    "2PACX-1vRQsjM2Yp05NyPTnXEeUuHrO8oiOJhuRmtDqIFQHOrsAGNnxVHDvs8eg0_qS-6CR5mnAG29v02j-fJ7/"
+    "pubhtml?gid=331043462&single=true&widget=true&headers=false"
+)
+
+st.caption(
+    "구글 시트가 보이지 않으면 아래 '새 탭에서 열기' 링크로 열거나, "
+    "시트의 '웹에 게시(Publish to web)' 설정을 확인해주세요."
+)
+
+# iframe 임베드 (높이 800, 스크롤 허용). 외부 시트 로딩 실패는 iframe 내부 문제로
+# 한정되며 Streamlit 앱 전체를 중단시키지 않는다.
+components.iframe(sheet_url, height=800, scrolling=True)
+
+# 새 탭에서 열기 링크 (iframe 이 막혀도 사용자가 직접 확인할 수 있도록 제공)
+st.markdown(
+    f"<div style='font-size:13px; margin-top:8px;'>🔗 "
+    f"<a href='{sheet_url}' target='_blank' rel='noopener noreferrer'>"
+    "새 탭에서 시장온도 참고 시트 열기</a></div>",
+    unsafe_allow_html=True,
+)
