@@ -457,3 +457,298 @@ def align_and_convert_to_krw(usd_close, usdkrw_rate):
 
     aligned_rate = aligned_rate.reindex(krw_close.index)
     return krw_close, aligned_rate
+
+
+
+# ──────────────────────────────────────────────
+# 고라니 시장온도 v2 (진단용): CNN 유사 7요소 + rolling percentile rank
+#   - 모든 정규화는 rolling percentile rank(0~100)로 통일한다.
+#   - 어떤 구성요소 실패도 전체 예외로 번지지 않도록 내부에서 방어한다.
+#   - v1(compute_gorani_market_temperature)은 그대로 유지(메인/ fallback).
+# ──────────────────────────────────────────────
+def _as_1d_series(obj):
+    """입력을 1-D 숫자 Series 로 강제 정리한다.
+
+    - DataFrame 이면 첫 컬럼 사용, MultiIndex/tz/중복 인덱스 방어.
+    - 숫자 변환 불가 값은 제거. 실패 시 빈 Series.
+    """
+    if obj is None:
+        return pd.Series(dtype="float64")
+    try:
+        if isinstance(obj, pd.DataFrame):
+            if obj.shape[1] == 0:
+                return pd.Series(dtype="float64")
+            series = obj.iloc[:, 0]
+        elif isinstance(obj, pd.Series):
+            series = obj
+        else:
+            series = pd.Series(obj)
+
+        series = pd.to_numeric(series, errors="coerce").dropna()
+        if series.empty:
+            return pd.Series(dtype="float64")
+
+        # 인덱스 정규화 (datetime 인 경우에 한해 tz 제거/중복 정리)
+        try:
+            idx = pd.to_datetime(series.index, errors="coerce")
+            if idx.notna().all():
+                series.index = idx
+                if getattr(series.index, "tz", None) is not None:
+                    series.index = series.index.tz_localize(None)
+                series = series[~series.index.duplicated(keep="last")].sort_index()
+        except Exception:
+            pass
+
+        return series
+    except Exception:
+        return pd.Series(dtype="float64")
+
+
+def rolling_percentile_score(series, window: int = 252, min_periods: int = 120, invert: bool = False):
+    """최신값이 과거 rolling window 내에서 차지하는 분위(0~100)를 반환한다.
+
+    - window 내에서 (최신값 이하인 관측 비율) × 100.
+    - 데이터 부족(min_periods 미만)/빈 Series/계산 불가 시 None.
+    - invert=True 이면 100 - score (공포 방향 지표 반전용).
+    - 0~100 으로 clip.
+    """
+    try:
+        s = _as_1d_series(series)
+        if s.empty or len(s) < min_periods:
+            return None
+
+        win = s.tail(window)
+        if len(win) < min_periods:
+            return None
+
+        latest = _to_float_or_none(win.iloc[-1])
+        if latest is None:
+            return None
+
+        valid = win.dropna()
+        n = len(valid)
+        if n < min_periods:
+            return None
+
+        # 최신값 이하인 관측 비율 → 분위(percentile rank)
+        count_le = int((valid <= latest).sum())
+        score = (count_le / n) * 100.0
+
+        if invert:
+            score = 100.0 - score
+        return clip_score(score)
+    except Exception:
+        return None
+
+
+def _aligned_ratio(series_a, series_b):
+    """두 Series 를 inner-join 정렬한 비율 (a/b) 시계열을 반환한다.
+
+    pd.concat 대신 Series.align(join='inner') 사용. 실패/빈 결과 시 빈 Series.
+    """
+    try:
+        a = _as_1d_series(series_a)
+        b = _as_1d_series(series_b)
+        if a.empty or b.empty:
+            return pd.Series(dtype="float64")
+        a2, b2 = a.align(b, join="inner")
+        b2 = b2.replace(0.0, pd.NA)
+        ratio = (a2 / b2).dropna()
+        return _as_1d_series(ratio)
+    except Exception:
+        return pd.Series(dtype="float64")
+
+
+def _pct_change_series(series, periods: int = 20):
+    """n 기간 변화율 시계열 (x / x.shift(n) - 1). 실패 시 빈 Series."""
+    try:
+        s = _as_1d_series(series)
+        if s.empty or len(s) <= periods:
+            return pd.Series(dtype="float64")
+        changed = (s / s.shift(periods) - 1.0).dropna()
+        return _as_1d_series(changed)
+    except Exception:
+        return pd.Series(dtype="float64")
+
+
+def compute_gorani_market_temperature_v2_components(
+    spy_close=None,
+    rsp_close=None,
+    hyg_close=None,
+    lqd_close=None,
+    tlt_close=None,
+    vix_close=None,
+    pcr_close=None,
+    vix3m_close=None,
+    window: int = 252,
+    min_periods: int = 120,
+):
+    """v2 7요소의 raw 최신값과 percentile score(0~100)를 계산한다.
+
+    반환: {이름: {"raw": float|None, "score": float|None, "status": str, "tickers": str}}
+    각 구성요소는 내부 try/except 로 격리되어 실패해도 전체가 죽지 않는다.
+    status: "ok" / "na".
+    """
+    out = {}
+
+    def _entry(raw, score, tickers):
+        status = "ok" if score is not None else "na"
+        return {"raw": raw, "score": score, "status": status, "tickers": tickers}
+
+    spy = _as_1d_series(spy_close)
+
+    # 1) Momentum: SPY / SPY 125MA - 1 (percentile)
+    try:
+        raw_series = pd.Series(dtype="float64")
+        if not spy.empty and len(spy) >= 125:
+            ma125 = spy.rolling(125).mean()
+            raw_series = (spy / ma125 - 1.0).dropna()
+        score = rolling_percentile_score(raw_series, window, min_periods, invert=False)
+        raw_last = _to_float_or_none(raw_series.iloc[-1]) if not raw_series.empty else None
+        out["Momentum"] = _entry(raw_last, score, "SPY")
+    except Exception:
+        out["Momentum"] = _entry(None, None, "SPY")
+
+    # 2) Price Strength: SPY 252일 레인지 위치 (percentile 파이프라인으로 통일)
+    try:
+        # raw signal = 종가 자체의 252일 분위 (고가권일수록 강함) → percentile
+        score = rolling_percentile_score(spy, window, min_periods, invert=False)
+        raw_last = _to_float_or_none(spy.iloc[-1]) if not spy.empty else None
+        out["Price Strength"] = _entry(raw_last, score, "SPY")
+    except Exception:
+        out["Price Strength"] = _entry(None, None, "SPY")
+
+    # 3) Breadth: (RSP/SPY) 20일 변화율 (percentile)
+    try:
+        ratio = _aligned_ratio(rsp_close, spy_close)
+        change = _pct_change_series(ratio, 20)
+        score = rolling_percentile_score(change, window, min_periods, invert=False)
+        raw_last = _to_float_or_none(change.iloc[-1]) if not change.empty else None
+        out["Breadth"] = _entry(raw_last, score, "RSP/SPY")
+    except Exception:
+        out["Breadth"] = _entry(None, None, "RSP/SPY")
+
+    # 4) Put/Call: ^CPC → ^CPCE 5일평균 (없으면 VIX/VIX3M proxy), 높을수록 공포(invert)
+    try:
+        raw_last = None
+        score = None
+        tickers = "^CPC/^CPCE"
+        pcr = _as_1d_series(pcr_close)
+        if not pcr.empty and len(pcr) >= 10:
+            pcr_5d = pcr.rolling(5).mean().dropna()
+            score = rolling_percentile_score(pcr_5d, window, min_periods, invert=True)
+            raw_last = _to_float_or_none(pcr_5d.iloc[-1]) if not pcr_5d.empty else None
+        if score is None:
+            # proxy: VIX / VIX3M (단기 변동성 우위 → 공포, invert)
+            proxy = _aligned_ratio(vix_close, vix3m_close)
+            score = rolling_percentile_score(proxy, window, min_periods, invert=True)
+            raw_last = _to_float_or_none(proxy.iloc[-1]) if not proxy.empty else None
+            tickers = "VIX/VIX3M(proxy)"
+        out["Put/Call"] = _entry(raw_last, score, tickers)
+    except Exception:
+        out["Put/Call"] = _entry(None, None, "^CPC/^CPCE")
+
+    # 5) Junk Bond Demand: HYG/LQD (percentile)
+    try:
+        ratio = _aligned_ratio(hyg_close, lqd_close)
+        score = rolling_percentile_score(ratio, window, min_periods, invert=False)
+        raw_last = _to_float_or_none(ratio.iloc[-1]) if not ratio.empty else None
+        out["Junk Bond"] = _entry(raw_last, score, "HYG/LQD")
+    except Exception:
+        out["Junk Bond"] = _entry(None, None, "HYG/LQD")
+
+    # 6) Market Volatility: VIX / VIX 50MA (높을수록 공포, invert)
+    try:
+        vix = _as_1d_series(vix_close)
+        raw_series = pd.Series(dtype="float64")
+        if not vix.empty and len(vix) >= 50:
+            ma50 = vix.rolling(50).mean()
+            raw_series = (vix / ma50).dropna()
+        score = rolling_percentile_score(raw_series, window, min_periods, invert=True)
+        raw_last = _to_float_or_none(raw_series.iloc[-1]) if not raw_series.empty else None
+        out["Volatility"] = _entry(raw_last, score, "^VIX")
+    except Exception:
+        out["Volatility"] = _entry(None, None, "^VIX")
+
+    # 7) Safe Haven Demand: SPY 20일 수익률 - TLT 20일 수익률 (percentile)
+    try:
+        spy_ret = _pct_change_series(spy_close, 20)
+        tlt_ret = _pct_change_series(tlt_close, 20)
+        diff = pd.Series(dtype="float64")
+        if not spy_ret.empty and not tlt_ret.empty:
+            a, b = spy_ret.align(tlt_ret, join="inner")
+            diff = (a - b).dropna()
+        score = rolling_percentile_score(diff, window, min_periods, invert=False)
+        raw_last = _to_float_or_none(diff.iloc[-1]) if not diff.empty else None
+        out["Safe Haven"] = _entry(raw_last, score, "SPY-TLT")
+    except Exception:
+        out["Safe Haven"] = _entry(None, None, "SPY-TLT")
+
+    return out
+
+
+def compute_gorani_market_temperature_v2(
+    spy_close=None,
+    rsp_close=None,
+    hyg_close=None,
+    lqd_close=None,
+    tlt_close=None,
+    vix_close=None,
+    pcr_close=None,
+    vix3m_close=None,
+    window: int = 252,
+    min_periods: int = 120,
+    min_components: int = 5,
+):
+    """고라니 시장온도 v2 (진단용) 최종 점수를 계산한다.
+
+    유효 구성요소가 min_components(기본 5) 미만이면 status="insufficient_data".
+    어떤 예외도 밖으로 던지지 않고 status="error" dict 로 반환한다.
+    반환: {"score", "label", "available_components", "min_components",
+           "components", "status"}.
+    """
+    base = {
+        "score": None,
+        "label": None,
+        "available_components": 0,
+        "min_components": min_components,
+        "components": {},
+        "status": "error",
+    }
+    try:
+        comps = compute_gorani_market_temperature_v2_components(
+            spy_close=spy_close,
+            rsp_close=rsp_close,
+            hyg_close=hyg_close,
+            lqd_close=lqd_close,
+            tlt_close=tlt_close,
+            vix_close=vix_close,
+            pcr_close=pcr_close,
+            vix3m_close=vix3m_close,
+            window=window,
+            min_periods=min_periods,
+        )
+        valid = [c["score"] for c in comps.values() if c.get("score") is not None]
+        count = len(valid)
+
+        if count < min_components:
+            return {
+                "score": None,
+                "label": None,
+                "available_components": count,
+                "min_components": min_components,
+                "components": comps,
+                "status": "insufficient_data",
+            }
+
+        score = clip_score(sum(valid) / count)
+        return {
+            "score": score,
+            "label": classify_fear_greed_score(score),
+            "available_components": count,
+            "min_components": min_components,
+            "components": comps,
+            "status": "ok",
+        }
+    except Exception:
+        return base
