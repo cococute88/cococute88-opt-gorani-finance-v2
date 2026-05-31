@@ -11,7 +11,6 @@ from logic.market import (
     compute_drawdown_series,
     compute_distance_from_moving_average,
     compute_gorani_market_temperature,
-    compute_gorani_market_temperature_v2,
     classify_fear_greed_score,
 )
 
@@ -328,37 +327,19 @@ dd_full = {t: compute_drawdown_series(s) for t, s in closes.items()}
 
 
 # ──────────────────────────────────────────────
-# 4-1. 시장 심리 요약 (고라니 시장온도 v2 / VIX)
+# 4-1. 시장 심리 요약 (고라니 시장온도 / VIX)
 # ──────────────────────────────────────────────
-# v2 구성요소에 필요한 추가 종목 조회 (실패 시 해당 구성요소만 제외)
-_v2_tickers = {"RSP": None, "HYG": None, "LQD": None, "TLT": None,
-               "^VIX": None, "^CPC": None, "^VIX3M": None}
-for _tk in _v2_tickers:
-    try:
-        _v2_tickers[_tk] = fetch_close_series(_tk)
-    except Exception:  # noqa: BLE001
-        pass
+vix_value = None
+vix_failed = False
+try:
+    vix_series = fetch_close_series("^VIX")
+    vix_value = _last_valid(vix_series)
+    if vix_value is None:
+        vix_failed = True
+except Exception:  # noqa: BLE001 - VIX 실패는 경고만, 페이지는 유지
+    vix_failed = True
 
-vix_series = _v2_tickers.get("^VIX")
-vix_value = _last_valid(vix_series)
-vix_failed = vix_value is None
-
-# v2 계산
-gorani_v2 = compute_gorani_market_temperature_v2(
-    spy_close=closes.get("SPY"),
-    rsp_close=_v2_tickers.get("RSP"),
-    hyg_close=_v2_tickers.get("HYG"),
-    lqd_close=_v2_tickers.get("LQD"),
-    tlt_close=_v2_tickers.get("TLT"),
-    vix_close=vix_series,
-    pcr_close=_v2_tickers.get("^CPC"),
-    vix3m_close=_v2_tickers.get("^VIX3M"),
-    k=1.0,
-    min_components=4,
-)
-
-# v1 fallback (v2 산출 불가 시 사용)
-gorani_v1 = compute_gorani_market_temperature(
+gorani = compute_gorani_market_temperature(
     qqq_rsi=_last_valid(rsi_full.get("QQQ")),
     spy_rsi=_last_valid(rsi_full.get("SPY")),
     qqq_drawdown=_last_valid(dd_full.get("QQQ")),
@@ -366,34 +347,23 @@ gorani_v1 = compute_gorani_market_temperature(
     spy_ma_distance=compute_distance_from_moving_average(closes.get("SPY"), 200),
     vix_level=vix_value,
 )
-
-# 메인 점수 결정
-if gorani_v2["ok"] and gorani_v2["score"] is not None:
-    main_score = gorani_v2["score"]
-    main_version = "v2"
-    main_components = gorani_v2["components"]
-    main_count = gorani_v2["available_count"]
-else:
-    main_score = gorani_v1["score"]
-    main_version = "v1"
-    main_components = gorani_v1.get("components", {})
-    main_count = len([v for v in main_components.values() if v is not None])
+gorani_score = gorani["score"]
 
 st.markdown("#### 시장 심리 요약")
 
 g_main, g_side = st.columns([1.3, 1])
 
 with g_main:
-    if main_score is not None:
+    if gorani_score is not None:
         st.plotly_chart(
-            build_sentiment_gauge(main_score, "고라니 시장온도"),
+            build_sentiment_gauge(gorani_score, "고라니 시장온도"),
             use_container_width=True,
         )
-        st.caption(f"상태: {classify_fear_greed_score(main_score)}")
+        st.caption(f"상태: {classify_fear_greed_score(gorani_score)}")
     else:
         st.info("시장 심리 점수를 산출할 데이터가 아직 없습니다.")
 
-    # 게이지 구간 범례
+    # 게이지 구간 범례 (모바일에서도 안전한 작은 텍스트)
     st.markdown(
         "<div style='font-size:11px; color:#6b7684; text-align:center; margin-top:-8px;'>"
         "극단적 공포 0–25 · 공포 25–45 · 중립 45–55 · 탐욕 55–75 · 극단적 탐욕 75–100"
@@ -401,10 +371,10 @@ with g_main:
         unsafe_allow_html=True,
     )
 
-    # 자체 지표 설명
+    # 자체 지표 설명 및 한계 안내
     st.caption(
-        "고라니 시장온도 v2는 CNN Fear & Greed의 7요소 철학을 참고한 자체 계산 지표입니다. "
-        "CNN 공식값과 완전히 일치하지 않을 수 있습니다."
+        "고라니 시장온도는 자체 계산 지표이며, CNN Fear & Greed 공식값과 다를 수 있습니다. "
+        "현재 v1은 RSI·고점대비 하락률·VIX 등 가격·변동성 중심 지표입니다."
     )
     st.markdown(
         "<div style='font-size:13px;'>🔗 "
@@ -415,7 +385,7 @@ with g_main:
     )
 
 with g_side:
-    # VIX 보조 카드
+    # VIX 보조 카드 (메인 판단 지표가 아닌 참고용)
     if vix_value is not None:
         st.metric("현재 VIX", f"{vix_value:.1f}")
         st.caption("참고: VIX가 높을수록 시장 불안 심리가 큼")
@@ -426,34 +396,19 @@ with g_side:
 if vix_failed:
     st.warning("⚠️ VIX(^VIX) 조회에 실패했습니다. 나머지 지표는 정상 표시됩니다.")
 
-if main_version == "v1":
-    st.info(
-        "ℹ️ v2 구성요소가 부족하여 v1 fallback을 표시하고 있습니다. "
-        "(v1은 RSI·하락률·VIX 기반으로, 상승장에서 높게 나올 수 있습니다.)"
-    )
-
-# 구성요소 expander
-with st.expander(f"고라니 시장온도 {main_version} 구성요소 ({main_count}개 사용)", expanded=False):
-    if main_version == "v2":
-        v2_labels = ["Momentum", "Price Strength", "Breadth", "Put/Call",
-                     "Junk Bond", "Volatility", "Safe Haven"]
-        for name in v2_labels:
-            score = main_components.get(name)
-            if score is not None:
-                st.caption(f"• {name}: {score:.0f}")
-            else:
-                st.caption(f"• {name}: N/A (데이터 없음)")
-        st.caption(
-            "각 구성요소는 252일 rolling z-score를 sigmoid로 0~100 점수화합니다. "
-            "z=0(과거 평균)이면 50점, 탐욕 방향일수록 100에 가깝습니다."
-        )
-    else:
+if gorani["components"]:
+    with st.expander("고라니 시장온도 구성요소 보기", expanded=False):
         comp_text = " · ".join(
-            f"{name} {value:.0f}" for name, value in main_components.items()
-            if value is not None
+            f"{name} {value:.0f}" for name, value in gorani["components"].items()
         )
-        st.caption(f"v1 구성요소: {comp_text}")
-        st.caption("RSI↑ · 하락폭↓ · 200일선 위 · VIX↓ 일수록 탐욕(점수↑)")
+        st.caption(
+            f"가용 지표 {len(gorani['components'])}개 평균 · {comp_text}. "
+            "RSI↑ · 하락폭↓ · 200일선 위 · VIX↓ 일수록 탐욕(점수↑)으로 해석합니다."
+        )
+        st.caption(
+            "ℹ️ 현재 v1은 가격·변동성 중심이라 모멘텀 장세에서 CNN 공식값보다 높게 나올 수 있습니다. "
+            "향후 PCR, 시장폭(RSP/SPY), 신용위험(HYG/LQD), 안전자산 선호(SPY vs TLT)를 반영한 v2로 개선 예정입니다."
+        )
 
 st.markdown("<hr style='border:0; border-top:1px solid #F2F4F6;'>", unsafe_allow_html=True)
 
