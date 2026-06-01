@@ -820,7 +820,9 @@ def build_vix_chart(vix_series: pd.Series, height: int = 300) -> go.Figure:
 # 4. 화면
 # ──────────────────────────────────────────────
 render_market_temperature_css()
+# 제목/부제는 새 카드형 상단 디자인의 render_title_area()에서만 1회 렌더링한다.
 render_title_area()
+# 기존 CNN 안내 블록은 제거하고, 출처 링크는 공포 & 탐욕 카드 오른쪽 위 CNN 링크만 유지한다.
 render_market_briefing(get_fear_and_greed_data(), load_market_briefing_snapshots())
 
 st.markdown("<div class='gorani-market-temp-section-gap'></div>", unsafe_allow_html=True)
@@ -924,9 +926,9 @@ except Exception:  # noqa: BLE001 - VIX 실패는 이 섹션만 영향, 페이�
 
 
 # ──────────────────────────────────────────────
-# 6. 시장온도 참고 시트 (구글 스프레드시트 임베드) — 탭 최하단
+# 6. 시장온도 참고 시트 (구글 스프레드시트 임베드) — 하단 참고 섹션
 #    - 구글 시트를 iframe 으로 "보기"만 한다 (Google API/secrets/pandas 미사용).
-#    - 시트가 로딩되지 않아도 위 RSI/하락률/VIX 화면은 영향을 받지 않는다.
+#    - 시트가 로딩되지 않아도 위 RSI/하락률/VIX/트리맵 화면은 영향을 받지 않는다.
 # ──────────────────────────────────────────────
 st.markdown("<hr style='border:0; border-top:1px solid #F2F4F6;'>", unsafe_allow_html=True)
 st.markdown("### 📊 시장온도 참고 시트")
