@@ -493,8 +493,16 @@ def _render_fng_svg(history_df: pd.DataFrame) -> str:
     tick_labels = []
     for i in tick_indexes:
         label = dates[i].strftime("%y.%m")
+
+        if i == 0:
+            anchor = "start"
+        elif i == n - 1:
+            anchor = "end"
+        else:
+            anchor = "middle"
+
         tick_labels.append(
-            f"<text x='{x_pos(i):.1f}' y='{height - 7}' text-anchor='middle' "
+            f"<text x='{x_pos(i):.1f}' y='{height - 7}' text-anchor='{anchor}' "
             "class='gorani-market-temp-svg-label'>" + escape(label) + "</text>"
         )
 
