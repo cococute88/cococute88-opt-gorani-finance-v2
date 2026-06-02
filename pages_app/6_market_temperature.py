@@ -492,7 +492,7 @@ def _render_fng_svg(history_df: pd.DataFrame) -> str:
     tick_indexes = sorted(set([0, n // 4, n // 2, (n * 3) // 4, n - 1]))
     tick_labels = []
     for i in tick_indexes:
-        label = dates[i].strftime("%Y.%m")
+        label = dates[i].strftime("%y.%m")
         tick_labels.append(
             f"<text x='{x_pos(i):.1f}' y='{height - 7}' text-anchor='middle' "
             "class='gorani-market-temp-svg-label'>" + escape(label) + "</text>"
@@ -511,6 +511,18 @@ def _render_fng_svg(history_df: pd.DataFrame) -> str:
             "class='gorani-market-temp-svg-label'>" + str(level) + "</text>"
         )
 
+    hover_points = []
+    for i, (_, row) in enumerate(chart.iterrows()):
+        x, y = points[i]
+        score = scores[i]
+        date = dates[i]
+        tooltip = f"{date.month}/{date.day}\n{score:.1f} · {_fng_rating_label(row.get('rating'))}"
+        hover_points.append(
+            f"<circle cx='{x:.1f}' cy='{y:.1f}' r='10' fill='transparent' "
+            "stroke='transparent' pointer-events='all'>"
+            f"<title>{escape(tooltip)}</title></circle>"
+        )
+
     return f"""
     <svg class="gorani-market-temp-fng-svg" viewBox="0 0 {width} {height}" role="img" aria-label="Fear and Greed history chart">
       <defs>
@@ -522,6 +534,7 @@ def _render_fng_svg(history_df: pd.DataFrame) -> str:
       {''.join(grid_lines)}
       <polygon points="{area_points}" fill="url(#goraniMarketTempFngFill)" />
       <polyline points="{line_points}" fill="none" stroke="#22c55e" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
+      {''.join(hover_points)}
       {''.join(tick_labels)}
     </svg>
     """
