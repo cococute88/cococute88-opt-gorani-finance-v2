@@ -24,6 +24,9 @@ st.markdown(TOSS_CSS, unsafe_allow_html=True)
 def render_html_block(html: str) -> None:
     """HTML 조각을 Markdown 코드블록으로 오인되지 않게 정리해 렌더링한다."""
     cleaned = dedent(html).strip()
+    # st.markdown fallback 환경에서도 4칸 들여쓰기된 HTML이 코드블록으로
+    # 해석되지 않도록 각 줄의 선행 공백을 제거한다.
+    cleaned = "\n".join(line.lstrip() for line in cleaned.splitlines())
     if hasattr(st, "html"):
         st.html(cleaned)
     else:
@@ -533,7 +536,7 @@ def render_tradingview_heatmap() -> None:
                 "hasSymbolTooltip": true,
                 "isMonoSize": false,
                 "width": "100%",
-                "height": "100%"
+                "height": 700
               }
               </script>
             </div>
