@@ -616,7 +616,6 @@ def render_title_area():
         """
         <div class="gorani-market-temp-title-wrap">
           <h1>🌡️ 시장온도</h1>
-          <p class="gorani-market-temp-subtitle">QQQ · SCHD · SPY 의 RSI 14 와 고점 대비 하락률로 시장의 과열/침체 상태를 살펴봅니다.</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -885,8 +884,8 @@ render_title_area()
 render_market_briefing(get_fear_and_greed_data(), load_market_briefing_snapshots())
 
 st.markdown("<div class='gorani-market-temp-section-gap'></div>", unsafe_allow_html=True)
-st.markdown("### 기존 RSI/MDD 분석 영역")
-st.caption("상단 시장 브리핑 아래에서 QQQ · SCHD · SPY 의 RSI 14와 고점 대비 하락률을 기존 방식 그대로 확인합니다.")
+st.markdown("### RSI/MDD 분석")
+st.caption("QQQ · SCHD · SPY 의 RSI 14와 고점 대비 하락률을 확인합니다.")
 
 ctrl_col, _ = st.columns([1, 3])
 with ctrl_col:
