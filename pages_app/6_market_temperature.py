@@ -1,5 +1,6 @@
 from io import StringIO
 from html import escape
+from textwrap import dedent
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -64,6 +65,12 @@ FEAR_GREED_RATING_COLORS = {
     "greed": "#22c55e",
     "extreme greed": "#10b981",
 }
+
+
+def render_html_block(html: str) -> None:
+    cleaned = dedent(html).strip()
+    cleaned = "\n".join(line.lstrip() for line in cleaned.splitlines())
+    st.markdown(cleaned, unsafe_allow_html=True)
 
 
 # ──────────────────────────────────────────────
@@ -620,29 +627,29 @@ def render_market_briefing(fng_data: dict, snapshots: dict):
         badge = ""
         if _safe_float(snap.get("change_pct")) is not None and _safe_float(snap.get("change_pct")) <= -2:
             badge = "<span class='gorani-market-temp-badge'>급락</span>"
-        return f"""
+        return dedent(f"""
           <div class="gorani-market-temp-card gorani-market-temp-small-card gorani-market-temp-index-card">
             <div class="gorani-market-temp-label">{escape(label)}</div>
             <div class="gorani-market-temp-value">{escape(value)}</div>
             <div class="gorani-market-temp-change {change_class}">{change}</div>
             {badge}{error}
           </div>
-        """
+        """).strip()
 
     def macro_card(label):
         snap = snapshots.get(label, {})
         value = _format_snapshot_value(label, snap.get("value"))
         macro_class = "krw" if label == "USD/KRW" else "risk"
         error = "<div class='gorani-market-temp-error'>조회 실패</div>" if snap.get("error") else ""
-        return f"""
+        return dedent(f"""
           <div class="gorani-market-temp-card gorani-market-temp-small-card gorani-market-temp-macro-card {macro_class}">
             <div class="gorani-market-temp-label">{escape(label)}</div>
             <div class="gorani-market-temp-value">{escape(value)}</div>
             {error}
           </div>
-        """
+        """).strip()
 
-    fng_html = f"""
+    fng_html = dedent(f"""
       <div class="gorani-market-temp-card gorani-market-temp-fng-card">
         <div class="gorani-market-temp-fng-head">
           <div class="gorani-market-temp-fng-title">공포 &amp; 탐욕 지수</div>
@@ -657,9 +664,9 @@ def render_market_briefing(fng_data: dict, snapshots: dict):
         <div class="gorani-market-temp-gradient-labels"><span>극단적 공포</span><span>공포</span><span>중립</span><span>탐욕</span><span>극단적 탐욕</span></div>
         {_render_fng_svg(history)}
       </div>
-    """
+    """).strip()
 
-    html = f"""
+    html = dedent(f"""
     <div class="gorani-market-temp-top-grid">
       {fng_html}
       <div class="gorani-market-temp-index-stack">
@@ -674,45 +681,76 @@ def render_market_briefing(fng_data: dict, snapshots: dict):
         {macro_card('VIX')}
       </div>
     </div>
-    """
-    st.markdown(html, unsafe_allow_html=True)
+    """).strip()
+    render_html_block(html)
 
 
 def render_tradingview_heatmap():
     st.markdown("<hr style='border:0; border-top:1px solid #F2F4F6;'>", unsafe_allow_html=True)
     st.markdown("### 🇺🇸 미국주식 섹터 트리맵")
     st.caption("S&P 500 구성종목의 섹터별 흐름을 TradingView 히트맵으로 확인합니다.")
-    tradingview_heatmap_html = """
-    <div class="tradingview-widget-container" style="width:100%; height:700px;">
-      <div class="tradingview-widget-container__widget"></div>
-      <div style="font-size:12px;color:#8b95a1;margin-top:6px;">
-        위젯이 표시되지 않으면 브라우저의 외부 스크립트 차단 설정을 확인해주세요.
-      </div>
-      <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-stock-heatmap.js" async>
-      {
-        "exchanges": [],
-        "dataSource": "SPX500",
-        "grouping": "sector",
-        "blockSize": "market_cap_basic",
-        "blockColor": "change",
-        "locale": "kr",
-        "symbolUrl": "",
-        "colorTheme": "light",
-        "hasTopBar": true,
-        "isDataSetEnabled": true,
-        "isZoomEnabled": true,
-        "hasSymbolTooltip": true,
-        "isMonoSize": false,
-        "width": "100%",
-        "height": 700
-      }
-      </script>
-    </div>
-    """
+    st.caption("위젯이 표시되지 않으면 브라우저의 외부 스크립트 차단 설정을 확인해주세요.")
+    tradingview_heatmap_html = dedent("""
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <style>
+          html,
+          body,
+          .tradingview-widget-container,
+          .tradingview-widget-container__widget,
+          .tradingview-widget-container iframe {
+            width: 100%;
+            height: 700px;
+            margin: 0;
+            padding: 0;
+          }
+          html, body {
+            overflow: hidden;
+          }
+          .tradingview-widget-container {
+            box-sizing: border-box;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="tradingview-widget-container">
+          <div class="tradingview-widget-container__widget"></div>
+          <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-stock-heatmap.js" async>
+          {
+            "exchanges": [],
+            "dataSource": "SPX500",
+            "grouping": "sector",
+            "blockSize": "market_cap_basic",
+            "blockColor": "change",
+            "locale": "kr",
+            "symbolUrl": "",
+            "colorTheme": "light",
+            "hasTopBar": true,
+            "isDataSetEnabled": true,
+            "isZoomEnabled": true,
+            "hasSymbolTooltip": true,
+            "isMonoSize": false,
+            "width": "100%",
+            "height": 700
+          }
+          </script>
+        </div>
+      </body>
+    </html>
+    """).strip()
     try:
-        components.html(tradingview_heatmap_html, height=740, scrolling=True)
+        components.html(tradingview_heatmap_html, height=700, scrolling=False)
     except Exception:  # noqa: BLE001 - 위젯 렌더링 실패 시에도 기존 콘텐츠 유지
         st.info("TradingView 히트맵 위젯을 불러오지 못했습니다. 잠시 후 다시 시도해주세요.")
+    st.markdown(
+        "<a href='https://www.tradingview.com/widget/stock-heatmap/' "
+        "target='_blank' rel='noopener noreferrer' "
+        "style='color:#8b95a1;font-size:12px;text-decoration:none;'>"
+        "TradingView Stock Heatmap 공식 위젯 열기</a>",
+        unsafe_allow_html=True,
+    )
 
 
 # ──────────────────────────────────────────────
