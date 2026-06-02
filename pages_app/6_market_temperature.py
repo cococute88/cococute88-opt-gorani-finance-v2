@@ -1,4 +1,6 @@
+from html import escape
 from io import StringIO
+from textwrap import dedent
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -18,6 +20,19 @@ from logic.market import (
 # ──────────────────────────────────────────────
 st.markdown(TOSS_CSS, unsafe_allow_html=True)
 
+
+def render_html_block(html: str) -> None:
+    """HTML 조각을 Markdown 코드블록으로 오인되지 않게 정리해 렌더링한다."""
+    cleaned = dedent(html).strip()
+    # st.markdown fallback 환경에서도 4칸 들여쓰기된 HTML이 코드블록으로
+    # 해석되지 않도록 각 줄의 선행 공백을 제거한다.
+    cleaned = "\n".join(line.lstrip() for line in cleaned.splitlines())
+    if hasattr(st, "html"):
+        st.html(cleaned)
+    else:
+        st.markdown(cleaned, unsafe_allow_html=True)
+
+
 # 시장온도 기준 종목 및 색상
 WATCHLIST = ["QQQ", "SCHD", "SPY"]
 TICKER_COLORS = {
@@ -34,6 +49,19 @@ RANGE_OPTIONS = {
     "5년": 1260,
     "전체": None,
 }
+
+
+MARKET_BRIEF_CARDS = {
+    "sp500": {"label": "S&P 500", "ticker": "^GSPC", "kind": "large", "tone": "blue", "unit": ""},
+    "nasdaq": {"label": "NASDAQ", "ticker": "^IXIC", "kind": "large", "tone": "blue", "unit": ""},
+    "dow": {"label": "DOW JONES", "ticker": "^DJI", "kind": "large", "tone": "blue", "unit": ""},
+    "vix": {"label": "VIX (공포지수)", "ticker": "^VIX", "kind": "large", "tone": "red", "unit": ""},
+    "usdkrw": {"label": "USD/KRW", "ticker": "KRW=X", "kind": "small", "tone": "blue", "unit": ""},
+    "wti": {"label": "WTI", "ticker": "CL=F", "kind": "small", "tone": "red", "unit": "$"},
+    "gold": {"label": "GOLD", "ticker": "GC=F", "kind": "small", "tone": "red", "unit": "$"},
+}
+
+MARKET_BRIEF_ORDER = ["sp500", "nasdaq", "dow", "vix", "usdkrw", "wti", "gold"]
 
 
 # ──────────────────────────────────────────────
@@ -165,6 +193,379 @@ def _last_valid(series: pd.Series):
     return float(clean.iloc[-1])
 
 
+def _extract_close_from_yfinance(df: pd.DataFrame, ticker: str) -> pd.Series:
+    """yfinance 단일/복수 티커 컬럼 구조에서 Close 계열을 안전하게 추출한다."""
+    if df is None or df.empty:
+        raise ValueError("조회 결과가 비어 있습니다.")
+
+    data = df.copy()
+    close = None
+
+    if isinstance(data.columns, pd.MultiIndex):
+        if "Close" in data.columns.get_level_values(0):
+            close = data.xs("Close", axis=1, level=0, drop_level=False)
+            if ticker in close.columns.get_level_values(-1):
+                close = close.xs(ticker, axis=1, level=-1).squeeze()
+            else:
+                close = close.droplevel(0, axis=1).iloc[:, 0]
+        elif "Close" in data.columns.get_level_values(-1):
+            close = data.xs("Close", axis=1, level=-1, drop_level=False)
+            close = close.droplevel(-1, axis=1).iloc[:, 0]
+    elif "Close" in data.columns:
+        close = data["Close"]
+
+    if close is None:
+        raise ValueError(f"Close 컬럼이 없습니다. 사용 가능 컬럼: {list(data.columns)}")
+
+    close = pd.to_numeric(pd.Series(close).dropna(), errors="coerce").dropna()
+    if close.empty:
+        raise ValueError("Close 데이터가 비어 있습니다.")
+    return close.astype("float64")
+
+
+def _format_market_value(value: float | None, unit: str = "") -> str:
+    if value is None:
+        return "데이터 없음"
+    if unit == "$":
+        return f"${value:,.2f}" if value < 1000 else f"${value:,.0f}"
+    if abs(value) >= 1000:
+        return f"{value:,.0f}"
+    return f"{value:,.2f}"
+
+
+def _format_market_change(change: float | None, change_pct: float | None, label: str) -> str:
+    if change is None and change_pct is None:
+        return ""
+    direction = "▲" if (change or 0) > 0 else "▼" if (change or 0) < 0 else "–"
+    change_unit = "p" if label in {"S&P 500", "NASDAQ", "DOW JONES"} else ""
+    change_text = ""
+    if change is not None:
+        change_text = f"{direction} {abs(change):,.2f}{change_unit}"
+    pct_text = f"{change_pct:+.2f}%" if change_pct is not None else ""
+    return " ".join(part for part in [change_text, pct_text] if part)
+
+
+def _market_status_badge(card_key: str, change_pct: float | None, value: float | None) -> str:
+    if card_key == "vix" and value is not None:
+        if value >= 30:
+            return "공포 확대"
+        if value >= 20:
+            return "변동성 주의"
+    if change_pct is not None:
+        if change_pct <= -2:
+            return "조정 진입"
+        if change_pct >= 2:
+            return "강한 반등"
+    return ""
+
+
+@st.cache_data(ttl=60 * 20, show_spinner=False)
+def fetch_market_brief_quote(ticker: str) -> dict:
+    """상단 시장 브리핑 카드용 최신가/전일 대비 데이터를 조회한다."""
+    if not ticker:
+        raise ValueError("티커가 비어 있습니다.")
+
+    errors = []
+    for period in ("5d", "1mo"):
+        try:
+            df = yf.download(
+                ticker,
+                period=period,
+                interval="1d",
+                auto_adjust=False,
+                actions=False,
+                progress=False,
+                threads=False,
+                timeout=15,
+            )
+            close = _extract_close_from_yfinance(df, ticker)
+            latest = float(close.iloc[-1])
+            previous = float(close.iloc[-2]) if len(close) >= 2 else None
+            change = latest - previous if previous not in (None, 0) else None
+            change_pct = (change / previous * 100) if change is not None and previous else None
+            return {
+                "ticker": ticker,
+                "value": latest,
+                "previous": previous,
+                "change": change,
+                "change_pct": change_pct,
+                "error": "",
+            }
+        except Exception as e:  # noqa: BLE001 - 카드 단위 실패 격리
+            errors.append(f"{period}: {e}")
+
+    return {"ticker": ticker, "value": None, "previous": None, "change": None, "change_pct": None, "error": " | ".join(errors)}
+
+
+def load_market_brief_cards() -> dict:
+    """7개 브리핑 카드 데이터를 카드별로 격리해 조회한다."""
+    quotes = {}
+    for key, meta in MARKET_BRIEF_CARDS.items():
+        try:
+            quotes[key] = fetch_market_brief_quote(meta["ticker"])
+        except Exception as e:  # noqa: BLE001 - 페이지 전체 중단 방지
+            quotes[key] = {"ticker": meta["ticker"], "value": None, "previous": None, "change": None, "change_pct": None, "error": str(e)}
+    return quotes
+
+
+def _render_market_brief_card(key: str, meta: dict, quote: dict) -> str:
+    label = escape(meta["label"])
+    value = quote.get("value")
+    change = quote.get("change")
+    change_pct = quote.get("change_pct")
+    has_error = value is None
+    value_text = "조회 실패" if quote.get("error") and has_error else _format_market_value(value, meta.get("unit", ""))
+    change_text = _format_market_change(change, change_pct, meta["label"])
+    badge = _market_status_badge(key, change_pct, value)
+    direction_class = "is-up" if (change or 0) > 0 else "is-down" if (change or 0) < 0 else "is-flat"
+    kind_class = "gorani-market-temp-card--small" if meta.get("kind") == "small" else "gorani-market-temp-card--large"
+    tone_class = f"gorani-market-temp-card--{meta.get('tone', 'blue')}"
+    error_text = "데이터 없음" if has_error else ""
+
+    return dedent(
+        f"""
+        <div class="gorani-market-temp-card {kind_class} {tone_class}">
+          <div class="gorani-market-temp-label">{label}</div>
+          <div class="gorani-market-temp-value">{escape(value_text)}</div>
+          <div class="gorani-market-temp-change {direction_class}">{escape(change_text)}</div>
+          {f'<div class="gorani-market-temp-badge">{escape(badge)}</div>' if badge else ''}
+          {f'<div class="gorani-market-temp-error">{escape(error_text)}</div>' if error_text else ''}
+        </div>
+        """
+    ).strip()
+
+
+def render_market_brief(quotes: dict) -> None:
+    cards = {
+        key: _render_market_brief_card(key, MARKET_BRIEF_CARDS[key], quotes.get(key, {}))
+        for key in MARKET_BRIEF_ORDER
+    }
+    html = dedent(
+        f"""
+        <style>
+          .gorani-market-temp-hero {{
+            padding: 3.2rem 0 1.3rem;
+            background: #FFFFFF;
+          }}
+          .gorani-market-temp-title {{
+            margin: 0 0 0.65rem;
+            color: #191F28;
+            font-size: clamp(2.1rem, 5vw, 3rem);
+            font-weight: 800;
+            letter-spacing: -0.04em;
+            line-height: 1.15;
+          }}
+          .gorani-market-temp-subtitle {{
+            margin: 0;
+            color: #8B95A1;
+            font-size: 0.98rem;
+            line-height: 1.6;
+          }}
+          .gorani-market-temp-grid {{
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(150px, 0.28fr);
+            gap: 1.35rem;
+            align-items: stretch;
+            margin: 1.6rem 0 2.3rem;
+          }}
+          .gorani-market-temp-large-grid {{
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 1rem;
+          }}
+          .gorani-market-temp-small-stack {{
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 1rem;
+          }}
+          .gorani-market-temp-card {{
+            position: relative;
+            overflow: hidden;
+            min-height: 132px;
+            padding: 1.05rem 1.25rem 1rem;
+            border: 1px solid #E5E8EB;
+            border-radius: 16px;
+            background: #FFFFFF;
+            box-shadow: 0 7px 18px rgba(25, 31, 40, 0.055);
+          }}
+          .gorani-market-temp-card--large::before {{
+            content: "";
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 5px;
+            background: #3182F6;
+          }}
+          .gorani-market-temp-card--red::before {{ background: #E42939; }}
+          .gorani-market-temp-card--small {{
+            min-height: 104px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            text-align: center;
+            padding: 1rem;
+          }}
+          .gorani-market-temp-small-stack .gorani-market-temp-card--blue {{ background: #F3F6FB; }}
+          .gorani-market-temp-small-stack .gorani-market-temp-card--red {{ background: #FFF2F2; border-color: #FFE0E0; }}
+          .gorani-market-temp-label {{
+            color: #A3ADBD;
+            font-size: 0.9rem;
+            font-weight: 800;
+            letter-spacing: 0.02em;
+          }}
+          .gorani-market-temp-value {{
+            margin-top: 0.42rem;
+            color: #191F28;
+            font-size: clamp(1.7rem, 3.5vw, 2.35rem);
+            font-weight: 850;
+            letter-spacing: -0.035em;
+            line-height: 1.1;
+          }}
+          .gorani-market-temp-card--red .gorani-market-temp-value,
+          .gorani-market-temp-small-stack .gorani-market-temp-card--red .gorani-market-temp-value {{ color: #E42939; }}
+          .gorani-market-temp-change {{
+            min-height: 1.45rem;
+            margin-top: 0.7rem;
+            font-size: 0.98rem;
+            font-weight: 800;
+          }}
+          .gorani-market-temp-change.is-down {{ color: #3182F6; }}
+          .gorani-market-temp-change.is-up {{ color: #E42939; }}
+          .gorani-market-temp-change.is-flat {{ color: #6B7684; }}
+          .gorani-market-temp-badge {{
+            display: inline-flex;
+            width: fit-content;
+            margin-top: 0.55rem;
+            padding: 0.24rem 0.5rem;
+            border-radius: 8px;
+            background: #FFF1F1;
+            color: #D93D44;
+            font-size: 0.82rem;
+            font-weight: 800;
+          }}
+          .gorani-market-temp-error {{
+            margin-top: 0.45rem;
+            color: #8B95A1;
+            font-size: 0.82rem;
+          }}
+          @media (max-width: 900px) {{
+            .gorani-market-temp-grid {{ grid-template-columns: 1fr; }}
+            .gorani-market-temp-small-stack {{ grid-template-columns: repeat(3, minmax(0, 1fr)); }}
+          }}
+          @media (max-width: 640px) {{
+            .gorani-market-temp-hero {{ padding-top: 2rem; }}
+            .gorani-market-temp-large-grid,
+            .gorani-market-temp-small-stack {{ grid-template-columns: 1fr; }}
+            .gorani-market-temp-card {{ min-height: 116px; }}
+          }}
+        </style>
+        <section class="gorani-market-temp-hero">
+          <h1 class="gorani-market-temp-title">🌡️ 시장온도</h1>
+          <p class="gorani-market-temp-subtitle">QQQ · SCHD · SPY 의 RSI 14 와 고점 대비 하락률로 시장의 과열/침체 상태를 살펴봅니다.</p>
+        </section>
+        <section class="gorani-market-temp-grid" aria-label="핵심 시장지표">
+          <div class="gorani-market-temp-large-grid">
+            {cards['sp500']}
+            {cards['nasdaq']}
+            {cards['dow']}
+            {cards['vix']}
+          </div>
+          <div class="gorani-market-temp-small-stack">
+            {cards['usdkrw']}
+            {cards['wti']}
+            {cards['gold']}
+          </div>
+        </section>
+        """
+    ).strip()
+    render_html_block(html)
+
+
+def render_tradingview_heatmap() -> None:
+    st.markdown("<hr style='border:0; border-top:1px solid #F2F4F6;'>", unsafe_allow_html=True)
+    st.markdown("### 🇺🇸 미국주식 섹터 트리맵")
+    st.caption("S&P 500 구성종목의 섹터별 흐름을 TradingView 히트맵으로 확인합니다.")
+
+    tradingview_heatmap_html = dedent(
+        """
+        <!DOCTYPE html>
+        <html>
+          <head>
+            <meta charset="UTF-8" />
+            <style>
+              html,
+              body {
+                margin: 0;
+                padding: 0;
+                width: 100%;
+                height: 720px;
+                background: #ffffff;
+                overflow: hidden;
+              }
+              .tradingview-widget-container,
+              .tradingview-widget-container__widget {
+                width: 100%;
+                height: 700px;
+                min-height: 700px;
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+              }
+              .tradingview-widget-container iframe {
+                width: 100% !important;
+                height: 700px !important;
+                min-height: 700px !important;
+              }
+            </style>
+          </head>
+          <body>
+            <div class="tradingview-widget-container">
+              <div class="tradingview-widget-container__widget"></div>
+              <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-stock-heatmap.js" async>
+              {
+                "exchanges": [],
+                "dataSource": "SPX500",
+                "grouping": "sector",
+                "blockSize": "market_cap_basic",
+                "blockColor": "change",
+                "locale": "kr",
+                "symbolUrl": "",
+                "colorTheme": "light",
+                "hasTopBar": true,
+                "isDataSetEnabled": true,
+                "isZoomEnabled": true,
+                "hasSymbolTooltip": true,
+                "isMonoSize": false,
+                "width": "100%",
+                "height": 700
+              }
+              </script>
+            </div>
+          </body>
+        </html>
+        """
+    ).strip()
+
+    try:
+        components.html(tradingview_heatmap_html, height=730, scrolling=False)
+    except Exception:  # noqa: BLE001 - 외부 위젯 실패가 페이지 전체로 전파되지 않도록 방어
+        st.info("TradingView 히트맵 위젯을 불러오지 못했습니다. 브라우저 외부 스크립트 차단 설정을 확인해주세요.")
+
+    render_html_block(
+        """
+        <div style="font-size:12px; color:#8b95a1; margin-top:6px;">
+          <a href="https://www.tradingview.com/widget/stock-heatmap/"
+             target="_blank"
+             rel="noopener noreferrer"
+             style="color:#8b95a1; text-decoration:none;">
+            TradingView Stock Heatmap 공식 위젯 열기
+          </a>
+        </div>
+        """
+    )
+
+
 # ──────────────────────────────────────────────
 # 3. 차트
 # ──────────────────────────────────────────────
@@ -269,10 +670,10 @@ def build_vix_chart(vix_series: pd.Series, height: int = 300) -> go.Figure:
 # ──────────────────────────────────────────────
 # 4. 화면
 # ──────────────────────────────────────────────
-st.markdown("# 🌡️ 시장온도")
-st.caption("QQQ · SCHD · SPY 의 RSI 14 와 고점 대비 하락률로 시장의 과열/침체 상태를 살펴봅니다.")
+market_brief_quotes = load_market_brief_cards()
+render_market_brief(market_brief_quotes)
 
-st.markdown("<hr style='border:0; border-top:1px solid #F2F4F6;'>", unsafe_allow_html=True)
+st.markdown("<div style='height: 0.4rem;'></div>", unsafe_allow_html=True)
 
 ctrl_col, _ = st.columns([1, 3])
 with ctrl_col:
@@ -360,6 +761,7 @@ if closes:
 # 캐시 초기화 (시세/RSI/가격 데이터가 일시적으로 비어 있을 때 수동 갱신용)
 if st.button("🔄 시세 캐시 초기화", use_container_width=True):
     fetch_close_series.clear()
+    fetch_market_brief_quote.clear()
     st.rerun()
 
 
@@ -416,3 +818,9 @@ st.markdown(
     "새 탭에서 시장온도 참고 시트 열기</a></div>",
     unsafe_allow_html=True,
 )
+
+
+# ──────────────────────────────────────────────
+# 7. TradingView 미국주식 섹터 트리맵 — 페이지 최하단
+# ──────────────────────────────────────────────
+render_tradingview_heatmap()
