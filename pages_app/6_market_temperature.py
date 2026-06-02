@@ -70,10 +70,7 @@ FEAR_GREED_RATING_COLORS = {
 def render_html_block(html: str) -> None:
     cleaned = dedent(html).strip()
     cleaned = "\n".join(line.lstrip() for line in cleaned.splitlines())
-    if hasattr(st, "html"):
-        st.html(cleaned)
-    else:
-        st.markdown(cleaned, unsafe_allow_html=True)
+    st.markdown(cleaned, unsafe_allow_html=True)
 
 
 # ──────────────────────────────────────────────
