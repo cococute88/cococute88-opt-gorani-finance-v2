@@ -208,7 +208,8 @@ def build_price_map(
     """Attach current prices to holdings using last trade price as API fallback.
 
     A failed current-price lookup must not become 0 KRW. If fetched price is
-    missing/invalid, the holding's last transaction unit price is used instead.
+    missing/invalid, the holding's last transaction unit price is used first,
+    then average cost is used as a final calculable fallback.
     """
     if holdings is None or holdings.empty:
         return pd.DataFrame()
@@ -217,12 +218,14 @@ def build_price_map(
     for row in holdings.to_dict("records"):
         fetch_ticker = row.get("fetch_ticker") or row.get("ticker")
         fetched = to_float(fetched_prices.get(fetch_ticker), 0.0)
-        fallback = to_float(row.get("last_trade_price"), 0.0)
+        last_trade = to_float(row.get("last_trade_price"), 0.0)
+        avg_cost = to_float(row.get("avg_cost"), 0.0)
+        fallback = last_trade if last_trade > 0 else avg_cost
         current_price = fetched if fetched > 0 else fallback
-        price_source = "current" if fetched > 0 else "last_trade"
+        price_source = "current" if fetched > 0 else ("last_trade" if last_trade > 0 else "avg_cost")
         fx = 1.0 if row.get("currency") == "KRW" else to_float(usdkrw, 0.0) or to_float(row.get("last_exchange_rate"), 0.0)
-        current_value = current_price * to_float(row.get("quantity"))
-        current_value_krw = current_value * fx if fx > 0 else None
+        current_value = current_price * to_float(row.get("quantity")) if current_price > 0 else None
+        current_value_krw = current_value * fx if current_value is not None and fx > 0 else None
         rows.append({**row, "current_price": current_price, "price_source": price_source, "fx_rate": fx, "current_value": current_value, "current_value_krw": current_value_krw})
     return pd.DataFrame(rows)
 
