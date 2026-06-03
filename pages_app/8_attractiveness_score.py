@@ -63,16 +63,67 @@ def _to_naive_normalized_index(index: pd.Index) -> pd.DatetimeIndex:
     return dt_index.normalize()
 
 
+def _normalize_dividends_to_close_basis(data: pd.DataFrame) -> pd.DataFrame:
+    """Return dividend events on the same split-adjusted basis as Yahoo Close.
+
+    Yahoo's historical ``Close`` is the regular close series adjusted for stock
+    splits, but not for dividend reinvestment.  That is the right denominator
+    for a Seeking Alpha-style TTM yield chart.  Dividend events are normally
+    returned on the same split-adjusted per-share basis, but some yfinance/Yahoo
+    responses around ETF splits can contain pre-split cash amounts.  If a
+    pre-split dividend is implausibly larger than the first post-split dividend,
+    divide only the older dividends by the split ratio so numerator and
+    denominator stay on the same per-share basis.
+    """
+    if "Dividends" not in data.columns:
+        return pd.DataFrame(columns=["dividend"])
+
+    dividends = pd.to_numeric(data["Dividends"], errors="coerce").fillna(0).to_frame("dividend")
+    dividends = dividends[dividends["dividend"] > 0].copy()
+    if dividends.empty or "Stock Splits" not in data.columns:
+        return dividends.astype("float64")
+
+    splits = pd.to_numeric(data["Stock Splits"], errors="coerce").fillna(0)
+    splits = splits[splits > 0].sort_index()
+    if splits.empty:
+        return dividends.astype("float64")
+
+    adjusted = dividends.copy()
+    for split_date, split_ratio in splits.items():
+        if split_ratio <= 1:
+            continue
+
+        before = adjusted.loc[adjusted.index < split_date, "dividend"].tail(4)
+        after = adjusted.loc[adjusted.index > split_date, "dividend"].head(4)
+        if before.empty or after.empty:
+            continue
+
+        before_median = float(before.median())
+        after_median = float(after.median())
+        if after_median <= 0:
+            continue
+
+        # If dividends are already split-adjusted, before/after cash amounts
+        # should be broadly comparable.  If they are raw pre-split amounts, the
+        # ratio will be close to the stock split ratio (e.g. SCHD's 3-for-1).
+        if before_median / after_median > max(1.8, float(split_ratio) * 0.65):
+            adjusted.loc[adjusted.index < split_date, "dividend"] = (
+                adjusted.loc[adjusted.index < split_date, "dividend"] / float(split_ratio)
+            )
+
+    return adjusted.astype("float64")
+
+
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
-def fetch_schd_history() -> tuple[pd.DataFrame, pd.DataFrame, str | None]:
-    """Fetch SCHD adjusted price and dividend history from yfinance only."""
+def fetch_schd_history() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, str | None]:
+    """Fetch SCHD split-adjusted close and dividend history from yfinance only."""
     end = datetime.now(timezone.utc).date() + timedelta(days=1)
     start = end - timedelta(days=365 * 11 + 10)
 
     history = yf.Ticker(TICKER).history(
         start=start,
         end=end,
-        auto_adjust=True,
+        auto_adjust=False,
         actions=True,
         timeout=20,
     )
@@ -96,16 +147,13 @@ def fetch_schd_history() -> tuple[pd.DataFrame, pd.DataFrame, str | None]:
     if price_df.empty:
         raise ValueError("SCHD 유효 가격 데이터가 없습니다.")
 
-    if "Dividends" in data.columns:
-        dividend_series = pd.to_numeric(data["Dividends"], errors="coerce").fillna(0)
-    else:
-        dividend_series = pd.Series(0.0, index=data.index)
-
-    dividends_df = dividend_series[dividend_series > 0].to_frame("dividend")
+    dividends_df = _normalize_dividends_to_close_basis(data)
     dividends_df.index.name = "date"
     price_df.index.name = "date"
+    actions_df = data[[col for col in ["Dividends", "Stock Splits"] if col in data.columns]].copy()
+    actions_df.index.name = "date"
     fetched_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    return price_df.astype("float64"), dividends_df.astype("float64"), fetched_at
+    return price_df.astype("float64"), dividends_df.astype("float64"), actions_df, fetched_at
 
 
 def _calculate_ttm_dividend(price_index: pd.DatetimeIndex, dividends_df: pd.DataFrame) -> pd.Series:
@@ -135,9 +183,30 @@ def _calculate_ttm_dividend(price_index: pd.DatetimeIndex, dividends_df: pd.Data
     return pd.Series(ttm_values, index=price_index, dtype="float64")
 
 
+def _build_spike_diagnostics(metrics: pd.DataFrame, dividends_df: pd.DataFrame) -> pd.DataFrame:
+    """Build a small diagnostic table for dates that could create yield spikes."""
+    if metrics.empty:
+        return pd.DataFrame()
+
+    diagnostic = metrics.copy()
+    diagnostic["yield_abs_change"] = diagnostic["ttm_yield"].diff().abs()
+    diagnostic["price_pct_change"] = diagnostic["price"].pct_change().abs() * 100
+
+    dividend_dates = set(dividends_df.index.normalize()) if dividends_df is not None and not dividends_df.empty else set()
+    diagnostic["dividend_event"] = diagnostic.index.normalize().isin(dividend_dates)
+    candidates = diagnostic[
+        (diagnostic["yield_abs_change"] >= 0.35)
+        | (diagnostic["price_pct_change"] >= 8)
+        | diagnostic["dividend_event"]
+    ].tail(24)
+    return candidates[
+        ["price", "ttm_dividend", "ttm_yield", "ttm_yield_raw", "yield_abs_change", "price_pct_change", "dividend_event"]
+    ]
+
+
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
 def calculate_schd_dividend_yield() -> dict:
-    price_df, dividends_df, fetched_at = fetch_schd_history()
+    price_df, dividends_df, actions_df, fetched_at = fetch_schd_history()
     metrics = price_df.copy()
     metrics["ttm_dividend"] = _calculate_ttm_dividend(metrics.index, dividends_df)
     metrics["ttm_yield"] = np.where(
@@ -146,6 +215,14 @@ def calculate_schd_dividend_yield() -> dict:
         np.nan,
     )
     metrics = metrics.replace([np.inf, -np.inf], np.nan)
+
+    # Data-error guardrail: a split/adjustment mismatch usually appears as a
+    # one-day needle far outside SCHD's practical yield range.  Keep normal
+    # market movements intact, but exclude extreme observations from charting
+    # and averages so one bad Yahoo event does not dominate the visual.
+    metrics["ttm_yield_raw"] = metrics["ttm_yield"]
+    outlier_mask = metrics["ttm_yield"].notna() & ((metrics["ttm_yield"] < 1.0) | (metrics["ttm_yield"] > 8.0))
+    metrics.loc[outlier_mask, "ttm_yield"] = np.nan
 
     valid = metrics.dropna(subset=["price", "ttm_dividend", "ttm_yield"])
     if valid.empty:
@@ -188,6 +265,8 @@ def calculate_schd_dividend_yield() -> dict:
     return {
         "metrics": metrics,
         "dividends": dividends_df,
+        "actions": actions_df,
+        "spike_diagnostics": _build_spike_diagnostics(metrics, dividends_df),
         "latest_date": latest_date,
         "current_price": current_price,
         "current_ttm_yield": current_ttm_yield,
@@ -207,37 +286,6 @@ def apply_schd_styles() -> None:
     st.markdown(
         """
         <style>
-            .schd-card-grid {
-                display: grid;
-                grid-template-columns: repeat(5, minmax(145px, 1fr));
-                gap: 12px;
-                margin: 18px 0 20px;
-            }
-            .schd-card {
-                background: #ffffff;
-                border: 1px solid #edf0f3;
-                border-radius: 18px;
-                padding: 16px 15px;
-                box-shadow: 0 8px 22px rgba(25, 31, 40, 0.05);
-            }
-            .schd-card-label {
-                color: #6b7684;
-                font-size: 13px;
-                font-weight: 650;
-                margin-bottom: 7px;
-                word-break: keep-all;
-            }
-            .schd-card-value {
-                color: #191f28;
-                font-size: 24px;
-                font-weight: 800;
-                letter-spacing: -0.02em;
-            }
-            .schd-card-sub {
-                color: #8b95a1;
-                font-size: 12px;
-                margin-top: 6px;
-            }
             .schd-judgement {
                 background: #fff8ef;
                 border: 1px solid #ffe0bd;
@@ -248,17 +296,6 @@ def apply_schd_styles() -> None:
                 margin: 14px 0 22px;
             }
             .schd-judgement b { color: #b85b00; }
-            @media screen and (max-width: 1100px) {
-                .schd-card-grid { grid-template-columns: repeat(3, minmax(150px, 1fr)); }
-            }
-            @media screen and (max-width: 720px) {
-                .schd-card-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-                .schd-card { padding: 14px 13px; }
-                .schd-card-value { font-size: 20px; }
-            }
-            @media screen and (max-width: 420px) {
-                .schd-card-grid { grid-template-columns: 1fr; }
-            }
         </style>
         """,
         unsafe_allow_html=True,
@@ -274,19 +311,9 @@ def render_metric_cards(data: dict) -> None:
         ("최근 분기 배당금", _format_currency(data["recent_quarter_dividend"]), "가장 최근 1회 배당"),
     ]
 
-    html = ['<div class="schd-card-grid">']
-    for label, value, sub in cards:
-        html.append(
-            f"""
-            <div class="schd-card">
-                <div class="schd-card-label">{label}</div>
-                <div class="schd-card-value">{value}</div>
-                <div class="schd-card-sub">{sub}</div>
-            </div>
-            """
-        )
-    html.append("</div>")
-    st.markdown("".join(html), unsafe_allow_html=True)
+    columns = st.columns(len(cards))
+    for column, (label, value, sub) in zip(columns, cards, strict=True):
+        column.metric(label=label, value=value, help=sub, border=True)
 
 
 def _filter_period(metrics: pd.DataFrame, latest_date: pd.Timestamp, selected_period: str) -> pd.DataFrame:
@@ -321,40 +348,55 @@ def build_yield_chart(chart_df: pd.DataFrame, data: dict) -> go.Figure:
     )
 
     reference_lines = [
-        (data["current_ttm_yield"], "현재 배당률", "#f2994a"),
-        (data["five_year_average_yield"], "5년 평균", "#3182f6"),
-        (3.5, "3.5%", "#8b95a1"),
-        (3.7, "3.7%", "#6b7684"),
-        (3.8, "3.8%", "#4e5968"),
+        (data["current_ttm_yield"], "현재 배당률", "#f2994a", "solid", 1.8),
+        (data["five_year_average_yield"], "5년 평균", "#3182f6", "dash", 1.5),
+        (3.5, "3.5%", "#98a2b3", "dot", 1.0),
+        (3.7, "3.7%", "#667085", "dot", 1.0),
+        (3.8, "3.8%", "#475467", "dot", 1.0),
     ]
-    for y_value, label, color in reference_lines:
+    for y_value, label, color, dash, width in reference_lines:
         if y_value is None or pd.isna(y_value) or not np.isfinite(y_value):
             continue
-        fig.add_hline(
-            y=float(y_value),
-            line_dash="dot",
-            line_color=color,
-            line_width=1.2,
-            annotation_text=label,
-            annotation_position="top left",
-            annotation_font_size=11,
-            annotation_font_color=color,
+        fig.add_trace(
+            go.Scatter(
+                x=[chart_df.index.min(), chart_df.index.max()],
+                y=[float(y_value), float(y_value)],
+                mode="lines",
+                name=f"{label} {_format_percent(y_value)}",
+                line=dict(color=color, width=width, dash=dash),
+                opacity=0.78,
+                hovertemplate=f"{label}: %{{y:.2f}}%<extra></extra>",
+            )
         )
+
+    y_candidates = [chart_df["ttm_yield"].dropna()]
+    y_candidates.extend(pd.Series([line[0]]) for line in reference_lines if line[0] is not None and np.isfinite(line[0]))
+    y_values = pd.concat(y_candidates, ignore_index=True).dropna()
+    y_min = float(y_values.min()) if not y_values.empty else 3.0
+    y_max = float(y_values.max()) if not y_values.empty else 4.5
+    y_range = [min(3.0, y_min - 0.15), max(4.5, y_max + 0.15)]
 
     fig.update_layout(
         title="SCHD Dividend Yield TTM",
         height=470,
-        margin=dict(l=20, r=20, t=58, b=32),
+        margin=dict(l=24, r=24, t=62, b=36),
         paper_bgcolor="#ffffff",
         plot_bgcolor="#ffffff",
         hovermode="x unified",
         xaxis_title="날짜",
         yaxis_title="배당률",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1,
+            font=dict(color="#344054", size=11),
+        ),
         font=dict(color="#191f28"),
     )
-    fig.update_yaxes(ticksuffix="%", rangemode="tozero", gridcolor="#f2f4f6")
-    fig.update_xaxes(gridcolor="#f8f9fa")
+    fig.update_yaxes(ticksuffix="%", range=y_range, gridcolor="#edf2f7", zeroline=False)
+    fig.update_xaxes(gridcolor="#f8f9fa", rangeslider_visible=False)
     return fig
 
 
@@ -442,15 +484,20 @@ def main() -> None:
     with st.expander("계산 기준 보기"):
         st.markdown(
             """
-            - 현재 SCHD 가격: yfinance 조정 종가(`Close`, `auto_adjust=True`)의 가장 최근 거래일 값
-            - 최근 12개월 배당금: 최신 가격일 기준 과거 365일 동안 지급된 SCHD 배당금 합계
-            - 각 날짜의 TTM 배당률: 해당 날짜 기준 과거 365일 배당금 합계 ÷ 해당 날짜 가격 × 100
+            - 현재 SCHD 가격: yfinance 일반 종가(`Close`, `auto_adjust=False`, split-adjusted)의 가장 최근 거래일 값
+            - 최근 12개월 배당금: 최신 가격일 기준 과거 365일 동안 지급된 split-adjusted SCHD 배당금 합계
+            - 각 날짜의 TTM 배당률: 해당 날짜 기준 과거 365일 split-adjusted 배당금 합계 ÷ 같은 기준의 종가 × 100
             - 5년 평균 배당률: 최근 5년 구간의 일별 TTM 배당률 평균
             - TTM 기준 매수가: 최근 12개월 배당금 ÷ 목표 배당률
             - 최근 분기×4 기준 매수가: 최근 분기 배당금 × 4 ÷ 목표 배당률
+            - 데이터 오류 방어: 가격/배당 split 기준 불일치로 판단되는 1% 미만 또는 8% 초과 TTM 배당률은 차트와 평균 계산에서 제외
             """
         )
         st.caption(f"데이터 소스: yfinance · 티커: {TICKER} · 캐시 TTL: {CACHE_TTL_SECONDS:,}초 · 조회 시각: {data['fetched_at']}")
+        diagnostics = data.get("spike_diagnostics")
+        if diagnostics is not None and not diagnostics.empty:
+            st.markdown("#### 스파이크 점검용 최근 후보 데이터")
+            st.dataframe(diagnostics, use_container_width=True)
         if st.button("🔄 SCHD 배당률 캐시 초기화", use_container_width=True):
             fetch_schd_history.clear()
             calculate_schd_dividend_yield.clear()
