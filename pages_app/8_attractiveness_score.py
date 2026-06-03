@@ -300,58 +300,73 @@ def apply_schd_styles() -> None:
             .schd-yield-card {
                 background: #ffffff;
                 border: 1px solid #eaecf0;
-                border-radius: 18px;
+                border-radius: 16px;
                 box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
-                min-height: 134px;
-                padding: 16px 14px 14px;
-                margin-bottom: 10px;
+                min-height: 106px;
+                padding: 12px 12px 11px;
+                margin-bottom: 6px;
                 display: flex;
                 flex-direction: column;
                 justify-content: center;
                 align-items: center;
                 text-align: center;
-                gap: 7px;
+                gap: 4px;
             }
             .schd-yield-card-label {
                 color: #667085;
-                font-size: 0.86rem;
+                font-size: 0.82rem;
                 font-weight: 700;
-                line-height: 1.25;
-                min-height: 1.1rem;
+                line-height: 1.18;
+                min-height: 1rem;
+                margin: 0;
             }
             .schd-yield-card-value {
                 color: #191f28;
-                font-size: clamp(1.42rem, 2.3vw, 1.92rem);
+                font-size: clamp(1.32rem, 2.05vw, 1.76rem);
                 font-weight: 800;
                 letter-spacing: -0.035em;
-                line-height: 1.12;
+                line-height: 1.04;
+                margin: 0;
                 word-break: keep-all;
             }
             .schd-yield-card-subtext {
                 color: #667085;
-                font-size: 0.76rem;
+                font-size: 0.72rem;
                 font-weight: 600;
-                line-height: 1.32;
-                min-height: 2.05rem;
+                line-height: 1.2;
+                min-height: 1.55rem;
+                margin: 1px 0 0;
                 display: flex;
                 align-items: center;
                 justify-content: center;
                 text-align: center;
                 word-break: keep-all;
+            }
+            .schd-yield-target-summary {
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                flex-wrap: wrap;
+                gap: 0 4px;
+                line-height: 1.2;
+            }
+            .schd-yield-target-summary span {
+                white-space: nowrap;
             }
             .schd-yield-card-subtext:empty::after {
                 content: "\\00a0";
             }
             @media (max-width: 640px) {
                 .schd-yield-card {
-                    min-height: 122px;
-                    padding: 15px 14px 13px;
+                    min-height: 104px;
+                    padding: 12px 12px 10px;
                 }
                 .schd-yield-card-value {
-                    font-size: 1.65rem;
+                    font-size: 1.48rem;
                 }
                 .schd-yield-card-subtext {
-                    min-height: 1.8rem;
+                    font-size: 0.71rem;
+                    min-height: 1.45rem;
                 }
             }
             @media (prefers-color-scheme: dark) {
@@ -403,10 +418,11 @@ def _render_metric_card(
     bg_color: str = "#ffffff",
     value_color: str = "#191f28",
     border_color: str = "#eaecf0",
+    subtext_is_html: bool = False,
 ) -> None:
     safe_label = html.escape(str(label))
     safe_value = html.escape(str(value))
-    safe_subtext = html.escape(str(subtext))
+    safe_subtext = str(subtext) if subtext_is_html else html.escape(str(subtext))
     column.markdown(
         f'''
         <div class="schd-yield-card" style="background: {bg_color}; border-color: {border_color};">
@@ -425,20 +441,22 @@ def _build_target_price_summary(target_table: pd.DataFrame) -> str:
     if not {"목표 배당률", "TTM 기준 매수가"}.issubset(target_table.columns):
         return ""
 
+    target_colors = {
+        "3.5%": "#CA8A04",
+        "3.6%": "#65A30D",
+        "3.7%": "#16A34A",
+    }
     summary_parts = []
-    for target_label in ("3.5%", "3.6%", "3.7%"):
+    for target_label, color in target_colors.items():
         matched = target_table.loc[target_table["목표 배당률"] == target_label, "TTM 기준 매수가"]
-        if matched.empty:
-            summary_parts.append(f"{target_label} -")
-            continue
-
-        target_price = matched.iloc[0]
+        target_price = "-" if matched.empty else matched.iloc[0]
         if target_price is None or pd.isna(target_price) or str(target_price).strip() in {"", "-"}:
-            summary_parts.append(f"{target_label} -")
+            summary_text = f"{target_label} -"
         else:
-            summary_parts.append(f"{target_label} {target_price}")
+            summary_text = f"{target_label} {target_price}"
+        summary_parts.append(f'<span style="color:{color}">{html.escape(summary_text)}</span>')
 
-    return " · ".join(summary_parts)
+    return '<span class="schd-yield-target-summary">' + " · ".join(summary_parts) + "</span>"
 
 
 def render_metric_cards(data: dict) -> None:
@@ -457,6 +475,9 @@ def render_metric_cards(data: dict) -> None:
             "label": "현재 SCHD 가격",
             "value": _format_currency(data["current_price"]),
             "subtext": price_summary or f"기준일 {data['latest_date']:%Y-%m-%d}",
+            "bg_color": "#F3F6FA",
+            "border_color": "#D8E1EC",
+            "subtext_is_html": bool(price_summary),
         },
         {
             "label": "5년 평균 배당률",
