@@ -1,10 +1,24 @@
+import importlib.util
 import os
 from datetime import datetime, timedelta, timezone
+
+import streamlit as st
+
+
+def _find_missing_required_packages() -> list[str]:
+    """Return missing runtime packages before importing data/chart dependencies."""
+    required_packages = ["pandas", "numpy", "plotly", "yfinance"]
+    return [pkg for pkg in required_packages if importlib.util.find_spec(pkg) is None]
+
+
+_MISSING_REQUIRED_PACKAGES = _find_missing_required_packages()
+if _MISSING_REQUIRED_PACKAGES:
+    st.error(f"필수 패키지 누락: {', '.join(_MISSING_REQUIRED_PACKAGES)}")
+    st.stop()
 
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-import streamlit as st
 import yfinance as yf
 
 from ui.styles import TOSS_CSS
@@ -60,7 +74,6 @@ def fetch_schd_history() -> tuple[pd.DataFrame, pd.DataFrame, str | None]:
         end=end,
         auto_adjust=True,
         actions=True,
-        repair=True,
         timeout=20,
     )
 
@@ -388,6 +401,13 @@ def main() -> None:
     try:
         with st.spinner("SCHD 가격·배당 데이터를 불러오는 중입니다..."):
             data = calculate_schd_dividend_yield()
+    except ModuleNotFoundError as exc:
+        missing_package = exc.name or str(exc)
+        st.error(f"필수 패키지 누락: {missing_package}")
+        return
+    except ImportError as exc:
+        st.error(f"필수 패키지 누락: {exc}")
+        return
     except Exception as exc:
         st.error("SCHD 데이터를 불러오지 못했습니다. 잠시 후 다시 시도해주세요.")
         st.caption(f"오류 정보: {exc}")
