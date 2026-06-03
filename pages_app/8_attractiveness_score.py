@@ -369,7 +369,7 @@ def render_ttm_yield_card(column, data: dict) -> None:
         <div class="schd-ttm-card" style="background: {background_color};">
             <div class="schd-ttm-card__label">현재 TTM 배당률</div>
             <div class="schd-ttm-card__value" style="color: {value_color};">{_format_percent(data["current_ttm_yield"])}</div>
-            <div class="schd-ttm-card__help">현재 단계 · {status}</div>
+            <div class="schd-ttm-card__help">배당률에 비해 · {status}</div>
         </div>
         ''',
         unsafe_allow_html=True,
