@@ -267,13 +267,13 @@ if is_authenticated:
     _inject_global_layout_css()
 
     pages = [
-        st.Page("pages_app/1_asset_simulator.py", title="자산 시뮬레이터", icon="📊"),
-        st.Page("pages_app/2_asset_tracker.py", title="자산 트래커", icon="💰"),
-        st.Page("pages_app/3_dividend_sim.py", title="양도세치기 배당시뮬", icon="💵"),
-        st.Page("pages_app/4_conversion_analysis.py", title="매도전환계산기", icon="🔄"),
-        st.Page("pages_app/5_dividend_calendar.py", title="배당 캘린더", icon="📅", default=True),
+        st.Page("pages_app/1_asset_simulator.py", title="자산시뮬", icon="📊"),
+        st.Page("pages_app/2_asset_tracker.py", title="자산트래커", icon="💰"),
+        st.Page("pages_app/3_dividend_sim.py", title="양도세치기", icon="💵"),
+        st.Page("pages_app/4_conversion_analysis.py", title="매도전환계산", icon="🔄"),
+        st.Page("pages_app/5_dividend_calendar.py", title="배당캘린더", icon="📅", default=True),
         st.Page("pages_app/6_market_temperature.py", title="시장온도", icon="🌡️"),
-        st.Page("pages_app/7_mdd_calculator.py", title="MDD 계산기", icon="📉"),
+        st.Page("pages_app/7_mdd_calculator.py", title="MDD계산", icon="📉"),
         st.Page("pages_app/8_attractiveness_score.py", title="SCHD매력도", icon="📈"),
     ]
 
