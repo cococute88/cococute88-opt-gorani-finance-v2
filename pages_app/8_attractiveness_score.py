@@ -1,5 +1,5 @@
 import os
-from datetime import date
+from datetime import datetime, timedelta, timezone
 
 import numpy as np
 import pandas as pd
@@ -10,402 +10,241 @@ import yfinance as yf
 from ui.styles import TOSS_CSS
 
 
-TICKERS = ["QQQ", "SCHD", "VOO", "QLD"]
-COLORS = {
-    "QQQ": "#ff4fb3",
-    "SCHD": "#f2c94c",
-    "VOO": "#f2994a",
-    "QLD": "#eb5757",
+TICKER = "SCHD"
+CACHE_TTL_SECONDS = 60 * 60 * 12
+TARGET_YIELDS = [0.035, 0.037, 0.038]
+PERIOD_OPTIONS = {
+    "1M": pd.DateOffset(months=1),
+    "6M": pd.DateOffset(months=6),
+    "1Y": pd.DateOffset(years=1),
+    "5Y": pd.DateOffset(years=5),
+    "10Y": pd.DateOffset(years=10),
 }
-PARAMS = {
-    "QQQ": {"base_dd": 9, "step_dd": 4, "target_rsi": 40, "rsi_sigma": 15},
-    "VOO": {"base_dd": 7, "step_dd": 3, "target_rsi": 42, "rsi_sigma": 14},
-    "SCHD": {"base_dd": 7, "step_dd": 3, "target_rsi": 43, "rsi_sigma": 13},
-    "QLD": {"base_dd": 15, "step_dd": 6, "target_rsi": 36, "rsi_sigma": 16},
-}
-LINE_OPTIONS = [f"{ticker} 매력점수" for ticker in TICKERS] + [f"{ticker} 실제 종가" for ticker in TICKERS]
-CACHE_TTL_SECONDS = 60 * 60 * 6
+DEFAULT_PERIOD = "5Y"
+ORANGE = "#f2994a"
 
 
 # ──────────────────────────────────────────────
-# 1. 데이터/계산 함수
+# 1. Formatting helpers
 # ──────────────────────────────────────────────
-def _normalize_price_frame(df: pd.DataFrame) -> pd.DataFrame:
-    if df is None or df.empty:
-        raise ValueError("조회 결과가 비어 있습니다.")
-
-    normalized = df.copy()
-    if isinstance(normalized.columns, pd.MultiIndex):
-        normalized.columns = normalized.columns.get_level_values(0)
-
-    price_col = "Close"
-    if price_col not in normalized.columns and "Adj Close" in normalized.columns:
-        price_col = "Adj Close"
-    if price_col not in normalized.columns:
-        raise ValueError(f"Close/Adj Close 컬럼이 없습니다. 사용 가능 컬럼: {list(normalized.columns)}")
-
-    normalized.index = pd.to_datetime(normalized.index, errors="coerce")
-    normalized = normalized[~normalized.index.isna()]
-    if normalized.index.tz is not None:
-        normalized.index = normalized.index.tz_localize(None)
-    normalized.index = normalized.index.normalize()
-    normalized = normalized[~normalized.index.duplicated(keep="last")]
-    normalized = normalized.sort_index()
-    normalized["close"] = pd.to_numeric(normalized[price_col], errors="coerce")
-    normalized = normalized.dropna(subset=["close"])
-    normalized = normalized[normalized["close"] > 0]
-
-    if normalized.empty:
-        raise ValueError("유효한 종가 데이터가 없습니다.")
-    return normalized[["close"]].astype("float64")
+def _format_currency(value) -> str:
+    if value is None or pd.isna(value) or not np.isfinite(value):
+        return "-"
+    return f"${float(value):,.2f}"
 
 
-def _download_single_ticker(ticker: str, start=None, end=None) -> pd.DataFrame:
-    df = yf.download(
-        ticker,
+def _format_percent(value, digits: int = 2) -> str:
+    if value is None or pd.isna(value) or not np.isfinite(value):
+        return "-"
+    return f"{float(value):,.{digits}f}%"
+
+
+# ──────────────────────────────────────────────
+# 2. Data loading and calculation
+# ──────────────────────────────────────────────
+def _to_naive_normalized_index(index: pd.Index) -> pd.DatetimeIndex:
+    dt_index = pd.to_datetime(index, errors="coerce")
+    if getattr(dt_index, "tz", None) is not None:
+        dt_index = dt_index.tz_localize(None)
+    return dt_index.normalize()
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
+def fetch_schd_history() -> tuple[pd.DataFrame, pd.DataFrame, str | None]:
+    """Fetch SCHD adjusted price and dividend history from yfinance only."""
+    end = datetime.now(timezone.utc).date() + timedelta(days=1)
+    start = end - timedelta(days=365 * 11 + 10)
+
+    history = yf.Ticker(TICKER).history(
         start=start,
         end=end,
-        period="max" if start is None else None,
         auto_adjust=True,
-        actions=False,
-        progress=False,
-        threads=False,
+        actions=True,
+        repair=True,
         timeout=20,
     )
-    return _normalize_price_frame(df)
+
+    if history is None or history.empty:
+        raise ValueError("SCHD yfinance 조회 결과가 비어 있습니다.")
+
+    data = history.copy()
+    data.index = _to_naive_normalized_index(data.index)
+    data = data[~data.index.isna()]
+    data = data[~data.index.duplicated(keep="last")].sort_index()
+
+    if "Close" not in data.columns:
+        raise ValueError("SCHD 가격 데이터에 Close 컬럼이 없습니다.")
+
+    price_df = pd.DataFrame(index=data.index)
+    price_df["price"] = pd.to_numeric(data["Close"], errors="coerce")
+    price_df = price_df.dropna(subset=["price"])
+    price_df = price_df[price_df["price"] > 0]
+
+    if price_df.empty:
+        raise ValueError("SCHD 유효 가격 데이터가 없습니다.")
+
+    if "Dividends" in data.columns:
+        dividend_series = pd.to_numeric(data["Dividends"], errors="coerce").fillna(0)
+    else:
+        dividend_series = pd.Series(0.0, index=data.index)
+
+    dividends_df = dividend_series[dividend_series > 0].to_frame("dividend")
+    dividends_df.index.name = "date"
+    price_df.index.name = "date"
+    fetched_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    return price_df.astype("float64"), dividends_df.astype("float64"), fetched_at
+
+
+def _calculate_ttm_dividend(price_index: pd.DatetimeIndex, dividends_df: pd.DataFrame) -> pd.Series:
+    if dividends_df is None or dividends_df.empty:
+        return pd.Series(np.nan, index=price_index, dtype="float64")
+
+    dividends = dividends_df.copy().sort_index()
+    dividends["dividend"] = pd.to_numeric(dividends["dividend"], errors="coerce")
+    dividends = dividends.dropna(subset=["dividend"])
+    dividends = dividends[dividends["dividend"] > 0]
+
+    if dividends.empty:
+        return pd.Series(np.nan, index=price_index, dtype="float64")
+
+    div_dates = dividends.index.to_numpy(dtype="datetime64[ns]")
+    div_values = dividends["dividend"].to_numpy(dtype="float64")
+    cumulative = np.concatenate([[0.0], np.cumsum(div_values)])
+
+    ttm_values = []
+    for current_date in price_index:
+        current_np = np.datetime64(current_date)
+        start_np = np.datetime64(current_date - pd.Timedelta(days=365))
+        left = np.searchsorted(div_dates, start_np, side="right")
+        right = np.searchsorted(div_dates, current_np, side="right")
+        ttm_values.append(cumulative[right] - cumulative[left])
+
+    return pd.Series(ttm_values, index=price_index, dtype="float64")
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
-def get_price_data(tickers, start=None, end=None):
-    """SCHD의 실제 earliest valid date 이후 공통 기간 가격 데이터를 가져온다.
-
-    Returns:
-        tuple[dict[str, DataFrame], dict[str, str], str | None]:
-        정상 티커별 가격 데이터, 실패 메시지, SCHD 기준 시작일 문자열.
-    """
-    requested = [str(t).upper().strip() for t in tickers if str(t).strip()]
-    errors = {}
-    raw_data = {}
-
-    try:
-        schd_full = _download_single_ticker("SCHD")
-        schd_start = schd_full.index.min().normalize()
-        raw_data["SCHD"] = schd_full
-    except Exception as exc:
-        errors["SCHD"] = str(exc)
-        schd_start = pd.Timestamp(start).normalize() if start else None
-
-    for ticker in requested:
-        if ticker == "SCHD" and ticker in raw_data:
-            continue
-        try:
-            raw_data[ticker] = _download_single_ticker(ticker)
-        except Exception as exc:
-            errors[ticker] = str(exc)
-
-    if not raw_data:
-        return {}, errors, None
-
-    valid_starts = [df.index.min().normalize() for df in raw_data.values() if not df.empty]
-    common_start = max([d for d in [schd_start, *valid_starts] if d is not None])
-    common_end = pd.Timestamp(end).normalize() if end else min(df.index.max().normalize() for df in raw_data.values())
-
-    price_data = {}
-    for ticker, df in raw_data.items():
-        window = df.loc[(df.index >= common_start) & (df.index <= common_end)].copy()
-        if window.empty:
-            errors[ticker] = f"공통 기간({common_start:%Y-%m-%d} 이후)에 유효 데이터가 없습니다."
-        else:
-            price_data[ticker] = window
-
-    schd_start_text = schd_start.strftime("%Y-%m-%d") if schd_start is not None else None
-    return price_data, errors, schd_start_text
-
-
-def calculate_wilder_rsi(close, period=14) -> pd.Series:
-    close = pd.Series(close).astype("float64")
-    delta = close.diff()
-    gains = delta.clip(lower=0)
-    losses = -delta.clip(upper=0)
-
-    rsi = pd.Series(np.nan, index=close.index, dtype="float64")
-    if len(close) <= period:
-        return rsi
-
-    avg_gain = gains.iloc[1 : period + 1].mean()
-    avg_loss = losses.iloc[1 : period + 1].mean()
-
-    for i in range(period, len(close)):
-        if i > period:
-            avg_gain = ((avg_gain * (period - 1)) + gains.iloc[i]) / period
-            avg_loss = ((avg_loss * (period - 1)) + losses.iloc[i]) / period
-
-        if pd.isna(avg_gain) or pd.isna(avg_loss):
-            continue
-        if avg_loss == 0:
-            rsi.iloc[i] = 100.0 if avg_gain > 0 else 50.0
-        else:
-            rs = avg_gain / avg_loss
-            rsi.iloc[i] = 100 - (100 / (1 + rs))
-
-    return rsi.clip(0, 100)
-
-
-def calculate_attractiveness_for_ticker(df: pd.DataFrame, params: dict) -> pd.DataFrame:
-    scored = df.copy()
-    scored["close"] = pd.to_numeric(scored["close"], errors="coerce")
-    scored = scored.dropna(subset=["close"])
-    scored = scored[scored["close"] > 0]
-
-    scored["running_high"] = scored["close"].cummax()
-    scored["dd_pct"] = ((1 - scored["close"] / scored["running_high"]) * 100).clip(lower=0)
-
-    x = (scored["dd_pct"] - params["base_dd"]) / params["step_dd"]
-    scored["dd_score"] = np.where(x >= 0, 100 - 50 * (0.5**x), 50 * (2**x))
-    scored["dd_score"] = pd.Series(scored["dd_score"], index=scored.index).clip(0, 100)
-
-    scored["rsi14"] = calculate_wilder_rsi(scored["close"], period=14)
-    scored["rsi_score"] = 100 * np.exp(
-        -((scored["rsi14"] - params["target_rsi"]) ** 2) / (2 * params["rsi_sigma"] ** 2)
+def calculate_schd_dividend_yield() -> dict:
+    price_df, dividends_df, fetched_at = fetch_schd_history()
+    metrics = price_df.copy()
+    metrics["ttm_dividend"] = _calculate_ttm_dividend(metrics.index, dividends_df)
+    metrics["ttm_yield"] = np.where(
+        (metrics["price"] > 0) & (metrics["ttm_dividend"] > 0),
+        metrics["ttm_dividend"] / metrics["price"] * 100,
+        np.nan,
     )
+    metrics = metrics.replace([np.inf, -np.inf], np.nan)
 
-    scored["mdd_rarity_score"] = scored["dd_pct"].rank(pct=True, method="average") * 100
-    scored["max_dd"] = float(scored["dd_pct"].max()) if not scored.empty else 0.0
-    scored["depth_ratio"] = np.where(scored["max_dd"] > 0, scored["dd_pct"] / scored["max_dd"] * 100, 0)
-    scored["mdd_score"] = scored["mdd_rarity_score"] * 0.75 + scored["depth_ratio"] * 0.25
+    valid = metrics.dropna(subset=["price", "ttm_dividend", "ttm_yield"])
+    if valid.empty:
+        raise ValueError("SCHD TTM 배당률을 계산할 수 없습니다.")
 
-    dd_component = ((scored["dd_score"] - 50).clip(lower=0) / 50).fillna(0)
-    mdd_component = ((scored["mdd_score"] - 50).clip(lower=0) / 50).fillna(0)
-    rsi_component = ((scored["rsi_score"] - 50).clip(lower=0) / 50).fillna(0)
-    scored["combination_bonus"] = 8 * np.sqrt(dd_component * mdd_component * rsi_component)
+    latest_date = valid.index.max()
+    latest = valid.loc[latest_date]
+    current_price = float(latest["price"])
+    recent_12m_dividend = float(latest["ttm_dividend"])
+    current_ttm_yield = float(latest["ttm_yield"])
 
-    sigmoid = 1 / (1 + np.exp(-((scored["rsi14"] - 70) / 4)))
-    scored["overheat_penalty"] = 10 * sigmoid * (1 - scored["dd_score"] / 100)
+    if dividends_df is not None and not dividends_df.empty:
+        latest_dividend = dividends_df.sort_index()["dividend"].dropna().iloc[-1]
+        recent_quarter_dividend = float(latest_dividend) if latest_dividend > 0 else np.nan
+    else:
+        recent_quarter_dividend = np.nan
 
-    scored["attractiveness_score"] = (
-        scored["dd_score"] * 0.45
-        + scored["mdd_score"] * 0.35
-        + scored["rsi_score"] * 0.20
-        + scored["combination_bonus"]
-        - scored["overheat_penalty"]
-    ).clip(0, 100)
+    five_year_start = latest_date - pd.DateOffset(years=5)
+    five_year_yields = valid.loc[valid.index >= five_year_start, "ttm_yield"].dropna()
+    five_year_average_yield = float(five_year_yields.mean()) if not five_year_yields.empty else np.nan
 
-    scored = scored.replace([np.inf, -np.inf], np.nan)
-    numeric_cols = [
-        "close",
-        "running_high",
-        "dd_pct",
-        "dd_score",
-        "rsi14",
-        "rsi_score",
-        "mdd_rarity_score",
-        "max_dd",
-        "depth_ratio",
-        "mdd_score",
-        "combination_bonus",
-        "overheat_penalty",
-        "attractiveness_score",
-    ]
-    scored[numeric_cols] = scored[numeric_cols].astype("float64")
-    return scored
-
-
-def build_combined_chart(scored_df: pd.DataFrame, selected_lines, normalize_price=False) -> go.Figure:
-    fig = go.Figure()
-    selected = set(selected_lines or [])
-
-    for ticker in TICKERS:
-        ticker_df = scored_df[scored_df["ticker"] == ticker].sort_index()
-        if ticker_df.empty:
-            continue
-
-        score_name = f"{ticker} 매력점수"
-        price_name = f"{ticker} 실제 종가"
-        color = COLORS[ticker]
-
-        if score_name in selected:
-            fig.add_trace(
-                go.Scatter(
-                    x=ticker_df.index,
-                    y=ticker_df["attractiveness_score"],
-                    mode="lines",
-                    name=score_name,
-                    line=dict(color=color, width=2.4),
-                    yaxis="y",
-                    customdata=np.column_stack([ticker_df.index.strftime("%Y-%m-%d")]),
-                    hovertemplate=f"{ticker}<br>날짜: %{{customdata[0]}}<br>매력점수: %{{y:.2f}}<extra></extra>",
-                )
-            )
-
-        if price_name in selected:
-            price_series = ticker_df["close"].copy()
-            if normalize_price:
-                first_valid = price_series.dropna().iloc[0] if not price_series.dropna().empty else np.nan
-                price_series = price_series / first_valid * 100 if pd.notna(first_valid) and first_valid != 0 else price_series * np.nan
-            fig.add_trace(
-                go.Scatter(
-                    x=ticker_df.index,
-                    y=price_series,
-                    mode="lines",
-                    name=price_name if not normalize_price else f"{ticker} 가격지수",
-                    line=dict(color=color, width=1.8, dash="dot"),
-                    yaxis="y2",
-                    customdata=np.column_stack([ticker_df.index.strftime("%Y-%m-%d")]),
-                    hovertemplate=(
-                        f"{ticker}<br>날짜: %{{customdata[0]}}<br>"
-                        + ("가격지수: %{y:.2f}" if normalize_price else "종가: $%{y:,.2f}")
-                        + "<extra></extra>"
-                    ),
-                )
-            )
-
-    fig.update_layout(
-        title=dict(text="ETF 매수 매력도 점수와 가격", font=dict(size=19, color="#191F28")),
-        plot_bgcolor="#FFFFFF",
-        paper_bgcolor="#FFFFFF",
-        hovermode="x unified",
-        height=680,
-        margin=dict(l=20, r=22, t=62, b=20),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        xaxis=dict(title="날짜", hoverformat="%Y-%m-%d", rangeslider=dict(visible=False)),
-        yaxis=dict(title="매수 매력도 점수", range=[0, 100], tickformat=".0f", gridcolor="#F2F4F6"),
-        yaxis2=dict(
-            title="가격 지수, 시작일=100" if normalize_price else "실제 종가 USD",
-            overlaying="y",
-            side="right",
-            showgrid=False,
-            tickprefix="" if normalize_price else "$",
-            tickformat=",.0f" if normalize_price else ",.2f",
-        ),
-    )
-    return fig
-
-
-def build_summary(scored_df: pd.DataFrame) -> pd.DataFrame:
-    rows = []
-    for ticker in TICKERS:
-        ticker_df = scored_df[scored_df["ticker"] == ticker].dropna(subset=["attractiveness_score"])
-        if ticker_df.empty:
-            continue
-        latest = ticker_df.sort_index().iloc[-1]
-        rows.append(
+    target_rows = []
+    for target_yield in TARGET_YIELDS:
+        ttm_buy_price = recent_12m_dividend / target_yield if recent_12m_dividend > 0 else np.nan
+        quarter_buy_price = (
+            recent_quarter_dividend * 4 / target_yield
+            if recent_quarter_dividend is not None and recent_quarter_dividend > 0
+            else np.nan
+        )
+        drawdown = (ttm_buy_price / current_price - 1) * 100 if current_price > 0 and ttm_buy_price > 0 else np.nan
+        target_rows.append(
             {
-                "Ticker": ticker,
-                "Attractiveness Score": float(latest["attractiveness_score"]),
-                "DD %": float(latest["dd_pct"]),
-                "RSI14": float(latest["rsi14"]) if pd.notna(latest["rsi14"]) else np.nan,
-                "Date": latest.name,
+                "목표 배당률": f"{target_yield * 100:.1f}%",
+                "TTM 기준 매수가": _format_currency(ttm_buy_price),
+                "최근 분기×4 기준 매수가": _format_currency(quarter_buy_price),
+                "현재가 대비 하락률": _format_percent(drawdown, 1),
             }
         )
-    return pd.DataFrame(rows)
 
-
-def build_detail_table(scored_df: pd.DataFrame) -> pd.DataFrame:
-    detail = scored_df.reset_index().rename(
-        columns={
-            "index": "Date",
-            "ticker": "Ticker",
-            "close": "Close",
-            "dd_pct": "DD %",
-            "rsi14": "RSI14",
-            "dd_score": "DD Score",
-            "mdd_score": "MDD Score",
-            "rsi_score": "RSI Score",
-            "combination_bonus": "Bonus",
-            "overheat_penalty": "Penalty",
-            "attractiveness_score": "Attractiveness Score",
-        }
-    )
-    columns = [
-        "Date",
-        "Ticker",
-        "Close",
-        "DD %",
-        "RSI14",
-        "DD Score",
-        "MDD Score",
-        "RSI Score",
-        "Bonus",
-        "Penalty",
-        "Attractiveness Score",
-    ]
-    detail = detail[columns].copy()
-    detail["Date"] = pd.to_datetime(detail["Date"]).dt.date
-    numeric_cols = [col for col in columns if col not in {"Date", "Ticker"}]
-    detail[numeric_cols] = detail[numeric_cols].round(2)
-    return detail.sort_values("Date", ascending=False).reset_index(drop=True)
-
-
-@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
-def _load_scored_data(tickers, start=None, end=None):
-    price_data, errors, schd_start = get_price_data(tickers, start, end)
-    scored_frames = []
-    for ticker, df in price_data.items():
-        params = PARAMS.get(ticker)
-        if params is None:
-            continue
-        scored = calculate_attractiveness_for_ticker(df, params)
-        scored["ticker"] = ticker
-        scored_frames.append(scored)
-
-    if not scored_frames:
-        return pd.DataFrame(), errors, schd_start
-
-    scored_df = pd.concat(scored_frames, axis=0).sort_index()
-    scored_df = scored_df.replace([np.inf, -np.inf], np.nan)
-    return scored_df, errors, schd_start
+    return {
+        "metrics": metrics,
+        "dividends": dividends_df,
+        "latest_date": latest_date,
+        "current_price": current_price,
+        "current_ttm_yield": current_ttm_yield,
+        "five_year_average_yield": five_year_average_yield,
+        "recent_12m_dividend": recent_12m_dividend,
+        "recent_quarter_dividend": recent_quarter_dividend,
+        "target_table": pd.DataFrame(target_rows),
+        "fetched_at": fetched_at,
+    }
 
 
 # ──────────────────────────────────────────────
-# 2. UI 함수
+# 3. UI builders
 # ──────────────────────────────────────────────
-def _inject_page_css() -> None:
+def apply_schd_styles() -> None:
+    st.markdown(TOSS_CSS, unsafe_allow_html=True)
     st.markdown(
         """
         <style>
-            .attractiveness-card-grid {
+            .schd-card-grid {
                 display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-                gap: 14px;
-                margin: 14px 0 20px 0;
+                grid-template-columns: repeat(5, minmax(145px, 1fr));
+                gap: 12px;
+                margin: 18px 0 20px;
             }
-            .attractiveness-card {
-                background: #FFFFFF;
-                border: 1px solid #F2F4F6;
+            .schd-card {
+                background: #ffffff;
+                border: 1px solid #edf0f3;
                 border-radius: 18px;
-                padding: 18px 18px 16px 18px;
-                box-shadow: 0 6px 18px rgba(25, 31, 40, 0.05);
+                padding: 16px 15px;
+                box-shadow: 0 8px 22px rgba(25, 31, 40, 0.05);
             }
-            .attractiveness-card-title {
-                color: #4E5968;
-                font-size: 14px;
-                font-weight: 700;
-                margin-bottom: 8px;
-            }
-            .attractiveness-card-score {
-                color: #191F28;
-                font-size: 28px;
-                font-weight: 800;
-                line-height: 1.15;
-                margin-bottom: 10px;
-            }
-            .attractiveness-card-meta {
-                color: #6B7684;
+            .schd-card-label {
+                color: #6b7684;
                 font-size: 13px;
-                line-height: 1.55;
+                font-weight: 650;
+                margin-bottom: 7px;
+                word-break: keep-all;
             }
-            .attractiveness-note {
-                color: #8B95A1;
+            .schd-card-value {
+                color: #191f28;
+                font-size: 24px;
+                font-weight: 800;
+                letter-spacing: -0.02em;
+            }
+            .schd-card-sub {
+                color: #8b95a1;
                 font-size: 12px;
-                line-height: 1.55;
+                margin-top: 6px;
             }
-            @media (max-width: 640px) {
-                .attractiveness-card-grid {
-                    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-                    gap: 10px;
-                }
-                .attractiveness-card { padding: 15px 14px; border-radius: 16px; }
-                .attractiveness-card-score { font-size: 24px; }
+            .schd-judgement {
+                background: #fff8ef;
+                border: 1px solid #ffe0bd;
+                border-radius: 16px;
+                padding: 16px 18px;
+                color: #4e5968;
+                line-height: 1.65;
+                margin: 14px 0 22px;
+            }
+            .schd-judgement b { color: #b85b00; }
+            @media screen and (max-width: 1100px) {
+                .schd-card-grid { grid-template-columns: repeat(3, minmax(150px, 1fr)); }
+            }
+            @media screen and (max-width: 720px) {
+                .schd-card-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+                .schd-card { padding: 14px 13px; }
+                .schd-card-value { font-size: 20px; }
+            }
+            @media screen and (max-width: 420px) {
+                .schd-card-grid { grid-template-columns: 1fr; }
             }
         </style>
         """,
@@ -413,160 +252,190 @@ def _inject_page_css() -> None:
     )
 
 
-def _format_number(value, suffix="", prefix="") -> str:
-    if pd.isna(value):
-        return "N/A"
-    return f"{prefix}{float(value):,.2f}{suffix}"
+def render_metric_cards(data: dict) -> None:
+    cards = [
+        ("현재 SCHD 가격", _format_currency(data["current_price"]), f"기준일 {data['latest_date']:%Y-%m-%d}"),
+        ("현재 TTM 배당률", _format_percent(data["current_ttm_yield"]), "최근 12개월 배당금 ÷ 현재가"),
+        ("5년 평균 배당률", _format_percent(data["five_year_average_yield"]), "일별 TTM 배당률 평균"),
+        ("최근 12개월 배당금", _format_currency(data["recent_12m_dividend"]), "최신일 기준 365일 합계"),
+        ("최근 분기 배당금", _format_currency(data["recent_quarter_dividend"]), "가장 최근 1회 배당"),
+    ]
 
-
-def _render_summary_cards(summary_df: pd.DataFrame) -> None:
-    if summary_df.empty:
-        return
-
-    card_html = ['<div class="attractiveness-card-grid">']
-    for _, row in summary_df.iterrows():
-        ticker = row["Ticker"]
-        color = COLORS.get(ticker, "#3182F6")
-        card_html.append(
+    html = ['<div class="schd-card-grid">']
+    for label, value, sub in cards:
+        html.append(
             f"""
-            <div class="attractiveness-card">
-                <div class="attractiveness-card-title" style="color:{color};">{ticker}</div>
-                <div class="attractiveness-card-score">{_format_number(row['Attractiveness Score'])}</div>
-                <div class="attractiveness-card-meta">
-                    최신 DD: <b>{_format_number(row['DD %'], '%')}</b><br>
-                    최신 RSI: <b>{_format_number(row['RSI14'])}</b>
-                </div>
+            <div class="schd-card">
+                <div class="schd-card-label">{label}</div>
+                <div class="schd-card-value">{value}</div>
+                <div class="schd-card-sub">{sub}</div>
             </div>
             """
         )
-    card_html.append("</div>")
-    st.markdown("".join(card_html), unsafe_allow_html=True)
+    html.append("</div>")
+    st.markdown("".join(html), unsafe_allow_html=True)
 
 
-def _render_detail_expander(detail_df: pd.DataFrame) -> None:
-    with st.expander("날짜별 상세 데이터 보기", expanded=False):
-        if detail_df.empty:
-            st.info("표시할 상세 데이터가 없습니다.")
-            return
-
-        filter_cols = st.columns([1, 1.4])
-        with filter_cols[0]:
-            selected_tickers = st.multiselect(
-                "티커 필터",
-                options=TICKERS,
-                default=[ticker for ticker in TICKERS if ticker in detail_df["Ticker"].unique()],
-                key="attractiveness_detail_ticker_filter",
-            )
-        min_date = detail_df["Date"].min()
-        max_date = detail_df["Date"].max()
-        with filter_cols[1]:
-            selected_range = st.date_input(
-                "날짜 범위 필터",
-                value=(min_date, max_date),
-                min_value=min_date,
-                max_value=max_date,
-                format="YYYY/MM/DD",
-                key="attractiveness_detail_date_filter",
-            )
-
-        filtered = detail_df.copy()
-        if selected_tickers:
-            filtered = filtered[filtered["Ticker"].isin(selected_tickers)]
-        if isinstance(selected_range, tuple) and len(selected_range) == 2:
-            start_date, end_date = selected_range
-            filtered = filtered[(filtered["Date"] >= start_date) & (filtered["Date"] <= end_date)]
-
-        display_df = filtered.head(500)
-        st.caption(f"기본 표시: 최근 500행 / 필터 후 전체 {len(filtered):,}행")
-        st.dataframe(display_df, use_container_width=True, hide_index=True, height=420)
-
-        csv = filtered.to_csv(index=False).encode("utf-8-sig")
-        st.download_button(
-            "⬇️ 필터된 전체 데이터 CSV 다운로드",
-            data=csv,
-            file_name=f"attractiveness_detail_{date.today():%Y%m%d}.csv",
-            mime="text/csv",
-            use_container_width=True,
-        )
+def _filter_period(metrics: pd.DataFrame, latest_date: pd.Timestamp, selected_period: str) -> pd.DataFrame:
+    offset = PERIOD_OPTIONS.get(selected_period, PERIOD_OPTIONS[DEFAULT_PERIOD])
+    start_date = latest_date - offset
+    return metrics.loc[metrics.index >= start_date].copy()
 
 
-def render_page() -> None:
-    st.markdown(TOSS_CSS, unsafe_allow_html=True)
-    _inject_page_css()
-
-    st.markdown("# 📈 매력점수")
-    st.caption(
-        "매력점수는 고점 대비 하락률(DD), MDD 레어도, RSI 냉각도를 조합한 순수 시각화용 지표입니다. "
-        "자동매수 신호가 아니며, 점수가 높을수록 상대적으로 가격 매력이 커졌다는 뜻입니다."
+def build_yield_chart(chart_df: pd.DataFrame, data: dict) -> go.Figure:
+    hover_data = np.column_stack(
+        [
+            chart_df["ttm_dividend"].to_numpy(dtype="float64"),
+            chart_df["price"].to_numpy(dtype="float64"),
+        ]
     )
-    st.markdown("<hr style='border:0; border-top:1px solid #F2F4F6;'>", unsafe_allow_html=True)
-
-    with st.spinner("QQQ · SCHD · VOO · QLD 가격 데이터와 매력점수를 계산하는 중입니다..."):
-        scored_df, errors, schd_start = _load_scored_data(tuple(TICKERS), None, None)
-
-    if schd_start:
-        st.caption(
-            f"데이터 기준: yfinance에서 확인한 SCHD 실제 시작일({schd_start}) 이후 공통 기간입니다. "
-            "SCHD처럼 배당 영향이 큰 ETF는 adjusted 기준 가격 계산을 우선 사용합니다."
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=chart_df.index,
+            y=chart_df["ttm_yield"],
+            mode="lines",
+            name="TTM 배당률",
+            line=dict(color=ORANGE, width=3),
+            customdata=hover_data,
+            hovertemplate=(
+                "날짜: %{x|%Y-%m-%d}<br>"
+                "TTM 배당률: %{y:.2f}%<br>"
+                "TTM 배당금: $%{customdata[0]:.2f}<br>"
+                "가격: $%{customdata[1]:.2f}<extra></extra>"
+            ),
         )
+    )
+
+    reference_lines = [
+        (data["current_ttm_yield"], "현재 배당률", "#f2994a"),
+        (data["five_year_average_yield"], "5년 평균", "#3182f6"),
+        (3.5, "3.5%", "#8b95a1"),
+        (3.7, "3.7%", "#6b7684"),
+        (3.8, "3.8%", "#4e5968"),
+    ]
+    for y_value, label, color in reference_lines:
+        if y_value is None or pd.isna(y_value) or not np.isfinite(y_value):
+            continue
+        fig.add_hline(
+            y=float(y_value),
+            line_dash="dot",
+            line_color=color,
+            line_width=1.2,
+            annotation_text=label,
+            annotation_position="top left",
+            annotation_font_size=11,
+            annotation_font_color=color,
+        )
+
+    fig.update_layout(
+        title="SCHD Dividend Yield TTM",
+        height=470,
+        margin=dict(l=20, r=20, t=58, b=32),
+        paper_bgcolor="#ffffff",
+        plot_bgcolor="#ffffff",
+        hovermode="x unified",
+        xaxis_title="날짜",
+        yaxis_title="배당률",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        font=dict(color="#191f28"),
+    )
+    fig.update_yaxes(ticksuffix="%", rangemode="tozero", gridcolor="#f2f4f6")
+    fig.update_xaxes(gridcolor="#f8f9fa")
+    return fig
+
+
+def render_judgement(data: dict) -> None:
+    current_yield = data["current_ttm_yield"]
+    five_year_average = data["five_year_average_yield"]
+
+    if pd.isna(five_year_average) or not np.isfinite(five_year_average):
+        average_message = "5년 평균 배당률을 계산하기 위한 데이터가 충분하지 않습니다."
+    elif current_yield > five_year_average:
+        average_message = "현재 SCHD 배당률은 5년 평균보다 높습니다."
+    elif current_yield < five_year_average:
+        average_message = "현재 SCHD 배당률은 5년 평균보다 낮습니다."
+    else:
+        average_message = "현재 SCHD 배당률은 5년 평균과 같습니다."
+
+    if current_yield >= 3.7:
+        buy_message = "현재 배당률이 3.7% 이상입니다. SCHD 적극 매수 검토 구간입니다."
+    elif current_yield >= 3.5:
+        buy_message = "현재 배당률이 3.5% 이상입니다. SCHD 진입 가능 구간입니다."
+    else:
+        buy_message = "현재 배당률이 3.5% 미만입니다. 배당률 기준으로는 아직 보수적 접근 구간입니다."
+
     st.markdown(
-        "<div class='attractiveness-note'>MDD 레어도는 프로토타입 시각화를 위해 전체 기간 DD 분포의 percentile rank를 사용합니다. "
-        "따라서 look-ahead bias가 있으며 백테스트/자동매수 판단용이 아닙니다.</div>",
+        f"""
+        <div class="schd-judgement">
+            <div><b>5년 평균 비교</b> · {average_message}</div>
+            <div><b>매수 판단</b> · {buy_message}</div>
+        </div>
+        """,
         unsafe_allow_html=True,
     )
 
-    if errors:
-        st.warning("일부 티커 데이터 조회에 실패했습니다. 가능한 티커만 차트와 표에 표시합니다.")
-        for ticker, message in errors.items():
-            st.caption(f"{ticker}: {message}")
 
-    if scored_df.empty:
-        st.error("표시 가능한 ETF 가격 데이터가 없습니다. 네트워크 상태 또는 yfinance 응답을 확인해주세요.")
-        if st.button("🔄 매력점수 캐시 초기화", use_container_width=True):
-            get_price_data.clear()
-            _load_scored_data.clear()
-            st.rerun()
+# ──────────────────────────────────────────────
+# 4. Main page
+# ──────────────────────────────────────────────
+def main() -> None:
+    apply_schd_styles()
+
+    st.markdown("# 📈 SCHD 배당률 매수 판단")
+    st.caption("yfinance의 SCHD 가격 데이터와 배당 이력만으로 TTM 배당률을 직접 계산합니다.")
+
+    try:
+        with st.spinner("SCHD 가격·배당 데이터를 불러오는 중입니다..."):
+            data = calculate_schd_dividend_yield()
+    except Exception as exc:
+        st.error("SCHD 데이터를 불러오지 못했습니다. 잠시 후 다시 시도해주세요.")
+        st.caption(f"오류 정보: {exc}")
         return
 
-    summary_df = build_summary(scored_df)
-    _render_summary_cards(summary_df)
+    if data["current_price"] <= 0 or data["recent_12m_dividend"] <= 0:
+        st.warning("SCHD 가격 또는 최근 12개월 배당금이 0 이하로 계산되어 일부 지표가 제한될 수 있습니다.")
 
-    available_lines = []
-    for line in LINE_OPTIONS:
-        ticker = line.split()[0]
-        if ticker in scored_df["ticker"].unique():
-            available_lines.append(line)
+    if data["current_ttm_yield"] < 1 or data["current_ttm_yield"] > 8:
+        st.warning("최신 TTM 배당률이 일반적인 점검 범위(1%~8%) 밖입니다. 가격·배당 조정 기준을 확인해 주세요.")
 
-    controls = st.columns([2, 1, 1])
-    with controls[0]:
-        selected_lines = st.multiselect(
-            "표시할 선 선택",
-            options=available_lines,
-            default=available_lines,
-            key="attractiveness_selected_lines",
-        )
-    with controls[1]:
-        normalize_price = st.toggle("가격선을 100 기준 정규화해서 보기", value=False)
-    with controls[2]:
-        show_range_slider = st.toggle("기간 슬라이더 표시", value=False)
+    render_metric_cards(data)
+    render_judgement(data)
 
-    fig = build_combined_chart(scored_df, selected_lines, normalize_price=normalize_price)
-    fig.update_xaxes(rangeslider=dict(visible=show_range_slider))
-    st.plotly_chart(fig, use_container_width=True, config={"responsive": True, "displayModeBar": True})
-
-    st.caption(
-        "ℹ️ 실제 종가 4개는 동일한 오른쪽 Y축에 표시되어 가격대 차이 때문에 일부 점선이 덜 두드러질 수 있습니다. "
-        "필요하면 정규화 토글을 켜서 시작일=100 기준 가격 흐름을 비교하세요."
+    selected_period = st.radio(
+        "조회 기간",
+        options=list(PERIOD_OPTIONS.keys()),
+        index=list(PERIOD_OPTIONS.keys()).index(DEFAULT_PERIOD),
+        horizontal=True,
+        key="schd_yield_period",
     )
 
-    detail_df = build_detail_table(scored_df)
-    _render_detail_expander(detail_df)
+    chart_df = _filter_period(data["metrics"].dropna(subset=["ttm_yield"]), data["latest_date"], selected_period)
+    if chart_df.empty:
+        st.info("선택한 기간에 표시할 SCHD 배당률 데이터가 없습니다.")
+    else:
+        st.plotly_chart(build_yield_chart(chart_df, data), use_container_width=True)
 
-    if st.button("🔄 매력점수 캐시 초기화", use_container_width=True):
-        get_price_data.clear()
-        _load_scored_data.clear()
-        st.rerun()
+    st.markdown("## 목표가 표")
+    st.dataframe(data["target_table"], use_container_width=True, hide_index=True)
+
+    with st.expander("계산 기준 보기"):
+        st.markdown(
+            """
+            - 현재 SCHD 가격: yfinance 조정 종가(`Close`, `auto_adjust=True`)의 가장 최근 거래일 값
+            - 최근 12개월 배당금: 최신 가격일 기준 과거 365일 동안 지급된 SCHD 배당금 합계
+            - 각 날짜의 TTM 배당률: 해당 날짜 기준 과거 365일 배당금 합계 ÷ 해당 날짜 가격 × 100
+            - 5년 평균 배당률: 최근 5년 구간의 일별 TTM 배당률 평균
+            - TTM 기준 매수가: 최근 12개월 배당금 ÷ 목표 배당률
+            - 최근 분기×4 기준 매수가: 최근 분기 배당금 × 4 ÷ 목표 배당률
+            """
+        )
+        st.caption(f"데이터 소스: yfinance · 티커: {TICKER} · 캐시 TTL: {CACHE_TTL_SECONDS:,}초 · 조회 시각: {data['fetched_at']}")
+        if st.button("🔄 SCHD 배당률 캐시 초기화", use_container_width=True):
+            fetch_schd_history.clear()
+            calculate_schd_dividend_yield.clear()
+            st.rerun()
 
 
 if not os.environ.get("GORANI_SKIP_PAGE_RENDER"):
-    render_page()
+    main()
