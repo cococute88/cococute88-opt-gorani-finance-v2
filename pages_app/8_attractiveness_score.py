@@ -26,7 +26,7 @@ from ui.styles import TOSS_CSS
 
 TICKER = "SCHD"
 CACHE_TTL_SECONDS = 60 * 60 * 12
-TARGET_YIELDS = [0.035, 0.037, 0.038]
+TARGET_YIELDS = [0.035, 0.036, 0.037, 0.038]
 PERIOD_OPTIONS = {
     "1M": pd.DateOffset(months=1),
     "6M": pd.DateOffset(months=6),
@@ -306,6 +306,14 @@ def apply_schd_styles() -> None:
                 margin: 14px 0 22px;
             }
             .schd-judgement b { color: #b85b00; }
+            .schd-reference-link {
+                display: block;
+                margin-top: 6px;
+                color: #98a2b3;
+                font-size: 0.84rem;
+            }
+            .schd-reference-link a { color: #667085; text-decoration: none; }
+            .schd-reference-link a:hover { color: #344054; text-decoration: underline; }
         </style>
         """,
         unsafe_allow_html=True,
@@ -357,10 +365,17 @@ def build_yield_chart(chart_df: pd.DataFrame, data: dict) -> go.Figure:
         )
     )
 
+    five_year_average_yield = data["five_year_average_yield"]
     reference_lines = [
-        (data["current_ttm_yield"], "현재 배당률", "#f2994a", "solid", 1.8),
-        (data["five_year_average_yield"], "5년 평균", "#3182f6", "dash", 1.5),
+        (
+            five_year_average_yield,
+            f"5년 평균 {_format_percent(five_year_average_yield)}",
+            "#3182f6",
+            "dash",
+            1.5,
+        ),
         (3.5, "3.5%", "#98a2b3", "dot", 1.0),
+        (3.6, "3.6%", "#7c8798", "dot", 1.0),
         (3.7, "3.7%", "#667085", "dot", 1.0),
         (3.8, "3.8%", "#475467", "dot", 1.0),
     ]
@@ -372,7 +387,7 @@ def build_yield_chart(chart_df: pd.DataFrame, data: dict) -> go.Figure:
                 x=[chart_df.index.min(), chart_df.index.max()],
                 y=[float(y_value), float(y_value)],
                 mode="lines",
-                name=f"{label} {_format_percent(y_value)}",
+                name=label,
                 line=dict(color=color, width=width, dash=dash),
                 opacity=0.78,
                 hovertemplate=f"{label}: %{{y:.2f}}%<extra></extra>",
@@ -490,6 +505,12 @@ def main() -> None:
 
     st.markdown("## 목표가 표")
     st.dataframe(data["target_table"], use_container_width=True, hide_index=True)
+    st.markdown(
+        '<span class="schd-reference-link">참고: '
+        '<a href="https://seekingalpha.com/symbol/SCHD/dividends/yield" target="_blank" rel="noopener noreferrer">'
+        'Seeking Alpha SCHD Dividend Yield 페이지 바로가기</a></span>',
+        unsafe_allow_html=True,
+    )
 
     with st.expander("계산 기준 보기"):
         st.markdown(
@@ -498,6 +519,7 @@ def main() -> None:
             - 최근 4회 배당금: 최신 가격일 기준 가장 최근 4개 split-adjusted SCHD 배당금 합계
             - 각 날짜의 TTM 배당률: 해당 날짜까지 발생한 SCHD 배당 이벤트 중 가장 최근 4회 split-adjusted 배당금 합계 ÷ 같은 기준의 종가 × 100
             - 5년 평균 배당률: 최근 5년 구간의 일별 TTM 배당률 평균
+            - 목표 배당률 및 기준선: 3.5%, 3.6%, 3.7%, 3.8%
             - TTM 기준 매수가: 최근 4회 배당금 ÷ 목표 배당률
             - 최근 분기×4 기준 매수가: 최근 분기 배당금 × 4 ÷ 목표 배당률
             - 데이터 오류 방어: 가격/배당 split 기준 불일치로 판단되는 1% 미만 또는 8% 초과 TTM 배당률은 차트와 평균 계산에서 제외
