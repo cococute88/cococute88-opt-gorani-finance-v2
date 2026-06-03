@@ -142,6 +142,9 @@ def fetch_schd_history() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, str 
 
     price_df = pd.DataFrame(index=data.index)
     price_df["price"] = pd.to_numeric(data["Close"], errors="coerce")
+    price_df["Close"] = price_df["price"]
+    if "High" in data.columns:
+        price_df["High"] = pd.to_numeric(data["High"], errors="coerce")
     price_df = price_df.dropna(subset=["price"])
     price_df = price_df[price_df["price"] > 0]
 
@@ -155,6 +158,51 @@ def fetch_schd_history() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, str 
     actions_df.index.name = "date"
     fetched_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     return price_df.astype("float64"), dividends_df.astype("float64"), actions_df, fetched_at
+
+
+def _calculate_52w_high_drawdown(
+    price_df: pd.DataFrame,
+    current_price: float,
+    latest_date: pd.Timestamp,
+) -> tuple[float, float]:
+    """Return the latest 52-week high and current-price drawdown from it."""
+    if price_df is None or price_df.empty:
+        return np.nan, np.nan
+    if (
+        current_price is None
+        or pd.isna(current_price)
+        or not np.isfinite(current_price)
+        or current_price <= 0
+    ):
+        return np.nan, np.nan
+    if latest_date is None or pd.isna(latest_date):
+        return np.nan, np.nan
+
+    one_year_ago = latest_date - pd.Timedelta(days=365)
+    last_52w_df = price_df.loc[price_df.index >= one_year_ago]
+    if last_52w_df.empty:
+        return np.nan, np.nan
+
+    high_col = "High" if "High" in price_df.columns and not price_df["High"].dropna().empty else "Close"
+    high_52w = np.nan
+    for candidate_col in [high_col, "Close"]:
+        if candidate_col not in last_52w_df.columns:
+            continue
+        candidate_high = pd.to_numeric(last_52w_df[candidate_col], errors="coerce").dropna().max()
+        if (
+            candidate_high is not None
+            and not pd.isna(candidate_high)
+            and np.isfinite(candidate_high)
+            and candidate_high > 0
+        ):
+            high_52w = float(candidate_high)
+            break
+
+    if pd.isna(high_52w) or not np.isfinite(high_52w) or high_52w <= 0:
+        return np.nan, np.nan
+
+    drawdown_from_52w_high = current_price / high_52w - 1
+    return float(high_52w), float(drawdown_from_52w_high)
 
 
 def _calculate_latest_four_dividend_sum(price_index: pd.DatetimeIndex, dividends_df: pd.DataFrame) -> pd.Series:
@@ -244,6 +292,7 @@ def calculate_schd_dividend_yield() -> dict:
     current_price = float(latest["price"])
     latest_four_dividend = float(latest["ttm_dividend"])
     current_ttm_yield = float(latest["ttm_yield"])
+    high_52w, drawdown_from_52w_high = _calculate_52w_high_drawdown(price_df, current_price, latest_date)
 
     if dividends_df is not None and not dividends_df.empty:
         latest_dividend = dividends_df.sort_index()["dividend"].dropna().iloc[-1]
@@ -281,6 +330,8 @@ def calculate_schd_dividend_yield() -> dict:
         "latest_date": latest_date,
         "current_price": current_price,
         "current_ttm_yield": current_ttm_yield,
+        "high_52w": high_52w,
+        "drawdown_from_52w_high": drawdown_from_52w_high,
         "five_year_average_yield": five_year_average_yield,
         "latest_four_dividend": latest_four_dividend,
         "recent_quarter_dividend": recent_quarter_dividend,
@@ -435,6 +486,16 @@ def _render_metric_card(
     )
 
 
+def _build_52w_drawdown_price_label(drawdown_from_52w_high: float) -> str:
+    if (
+        drawdown_from_52w_high is None
+        or pd.isna(drawdown_from_52w_high)
+        or not np.isfinite(drawdown_from_52w_high)
+    ):
+        return "현재 SCHD 가격"
+    return f"현재가 = 52H {drawdown_from_52w_high * 100:.1f}%"
+
+
 def _build_target_price_summary(target_table: pd.DataFrame) -> str:
     if target_table is None or target_table.empty:
         return ""
@@ -472,7 +533,7 @@ def render_metric_cards(data: dict) -> None:
             "border_color": border_color,
         },
         {
-            "label": "현재 SCHD 가격",
+            "label": _build_52w_drawdown_price_label(data.get("drawdown_from_52w_high")),
             "value": _format_currency(data["current_price"]),
             "subtext": price_summary or f"기준일 {data['latest_date']:%Y-%m-%d}",
             "bg_color": "#F3F6FA",
