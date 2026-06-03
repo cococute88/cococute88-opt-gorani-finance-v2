@@ -296,16 +296,42 @@ def apply_schd_styles() -> None:
     st.markdown(
         """
         <style>
-            .schd-judgement {
-                background: #fff8ef;
-                border: 1px solid #ffe0bd;
-                border-radius: 16px;
-                padding: 16px 18px;
-                color: #4e5968;
-                line-height: 1.65;
-                margin: 14px 0 22px;
+            .schd-ttm-card {
+                border: 1px solid rgba(16, 24, 40, 0.08);
+                border-radius: 12px;
+                padding: 13px 16px 12px;
+                min-height: 112px;
+                box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+                margin-bottom: 8px;
             }
-            .schd-judgement b { color: #b85b00; }
+            .schd-ttm-card__label {
+                color: #667085;
+                font-size: 0.875rem;
+                font-weight: 600;
+                margin-bottom: 8px;
+            }
+            .schd-ttm-card__value {
+                font-size: 2rem;
+                font-weight: 750;
+                letter-spacing: -0.03em;
+                line-height: 1.15;
+                margin-bottom: 9px;
+            }
+            .schd-ttm-card__help {
+                color: #475467;
+                font-size: 0.78rem;
+                line-height: 1.35;
+            }
+            @media (prefers-color-scheme: dark) {
+                .schd-ttm-card {
+                    border-color: rgba(255, 255, 255, 0.12);
+                    box-shadow: none;
+                }
+                .schd-ttm-card__label,
+                .schd-ttm-card__help {
+                    color: #344054;
+                }
+            }
             .schd-reference-link {
                 display: block;
                 margin-top: 6px;
@@ -320,17 +346,47 @@ def apply_schd_styles() -> None:
     )
 
 
+def _get_ttm_yield_card_style(ttm_yield: float) -> tuple[str, str, str]:
+    if ttm_yield is None or pd.isna(ttm_yield) or not np.isfinite(ttm_yield):
+        return "#F2F4F7", "#344054", "계산 대기"
+    if ttm_yield < 3.4:
+        return "#FDECEC", "#DC2626", "주의"
+    if ttm_yield < 3.5:
+        return "#FFF3E0", "#EA580C", "관찰"
+    if ttm_yield < 3.6:
+        return "#FEF9C3", "#CA8A04", "진입"
+    if ttm_yield < 3.7:
+        return "#ECFCCB", "#65A30D", "관심"
+    if ttm_yield < 3.8:
+        return "#DCFCE7", "#16A34A", "우수"
+    return "#D1FAE5", "#047857", "강함"
+
+
+def render_ttm_yield_card(column, data: dict) -> None:
+    background_color, value_color, status = _get_ttm_yield_card_style(data["current_ttm_yield"])
+    column.markdown(
+        f'''
+        <div class="schd-ttm-card" style="background: {background_color};">
+            <div class="schd-ttm-card__label">현재 TTM 배당률</div>
+            <div class="schd-ttm-card__value" style="color: {value_color};">{_format_percent(data["current_ttm_yield"])}</div>
+            <div class="schd-ttm-card__help">최근 4회 배당금 ÷ 현재가 · {status}</div>
+        </div>
+        ''',
+        unsafe_allow_html=True,
+    )
+
+
 def render_metric_cards(data: dict) -> None:
     cards = [
         ("현재 SCHD 가격", _format_currency(data["current_price"]), f"기준일 {data['latest_date']:%Y-%m-%d}"),
-        ("현재 TTM 배당률", _format_percent(data["current_ttm_yield"]), "최근 4회 배당금 ÷ 현재가"),
         ("5년 평균 배당률", _format_percent(data["five_year_average_yield"]), "일별 TTM 배당률 평균"),
         ("최근 4회 배당금", _format_currency(data["latest_four_dividend"]), "최신일 기준 최근 4개 배당 합계"),
         ("최근 분기 배당금", _format_currency(data["recent_quarter_dividend"]), "가장 최근 1회 배당"),
     ]
 
-    columns = st.columns(len(cards))
-    for column, (label, value, sub) in zip(columns, cards, strict=True):
+    columns = st.columns(5)
+    render_ttm_yield_card(columns[0], data)
+    for column, (label, value, sub) in zip(columns[1:], cards, strict=True):
         column.metric(label=label, value=value, help=sub, border=True)
 
 
@@ -425,36 +481,6 @@ def build_yield_chart(chart_df: pd.DataFrame, data: dict) -> go.Figure:
     return fig
 
 
-def render_judgement(data: dict) -> None:
-    current_yield = data["current_ttm_yield"]
-    five_year_average = data["five_year_average_yield"]
-
-    if pd.isna(five_year_average) or not np.isfinite(five_year_average):
-        average_message = "5년 평균 배당률을 계산하기 위한 데이터가 충분하지 않습니다."
-    elif current_yield > five_year_average:
-        average_message = "현재 SCHD 배당률은 5년 평균보다 높습니다."
-    elif current_yield < five_year_average:
-        average_message = "현재 SCHD 배당률은 5년 평균보다 낮습니다."
-    else:
-        average_message = "현재 SCHD 배당률은 5년 평균과 같습니다."
-
-    if current_yield >= 3.7:
-        buy_message = "현재 배당률이 3.7% 이상입니다. SCHD 적극 매수 검토 구간입니다."
-    elif current_yield >= 3.5:
-        buy_message = "현재 배당률이 3.5% 이상입니다. SCHD 진입 가능 구간입니다."
-    else:
-        buy_message = "현재 배당률이 3.5% 미만입니다. 배당률 기준으로는 아직 보수적 접근 구간입니다."
-
-    st.markdown(
-        f"""
-        <div class="schd-judgement">
-            <div><b>5년 평균 비교</b> · {average_message}</div>
-            <div><b>매수 판단</b> · {buy_message}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
 
 # ──────────────────────────────────────────────
 # 4. Main page
@@ -463,7 +489,7 @@ def main() -> None:
     apply_schd_styles()
 
     st.markdown("# 📈 SCHD 배당률 매수 판단")
-    st.caption("yfinance의 SCHD 가격 데이터와 배당 이력만으로 TTM 배당률을 직접 계산합니다.")
+    st.caption("색상 기준: 3.4% 미만 주의, 3.5% 이상 진입, 3.6% 이상 관심, 3.7% 이상 우수, 3.8% 이상 강함")
 
     try:
         with st.spinner("SCHD 가격·배당 데이터를 불러오는 중입니다..."):
@@ -487,7 +513,6 @@ def main() -> None:
         st.warning("최신 TTM 배당률이 일반적인 점검 범위(1%~8%) 밖입니다. 가격·배당 조정 기준을 확인해 주세요.")
 
     render_metric_cards(data)
-    render_judgement(data)
 
     selected_period = st.radio(
         "조회 기간",
@@ -530,10 +555,6 @@ def main() -> None:
         if diagnostics is not None and not diagnostics.empty:
             st.markdown("#### 스파이크 점검용 최근 후보 데이터")
             st.dataframe(diagnostics, use_container_width=True)
-        if st.button("🔄 SCHD 배당률 캐시 초기화", use_container_width=True):
-            fetch_schd_history.clear()
-            calculate_schd_dividend_yield.clear()
-            st.rerun()
 
 
 if not os.environ.get("GORANI_SKIP_PAGE_RENDER"):
