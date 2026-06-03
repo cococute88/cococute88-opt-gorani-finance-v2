@@ -68,7 +68,7 @@ def _normalize_dividends_to_close_basis(data: pd.DataFrame) -> pd.DataFrame:
 
     Yahoo's historical ``Close`` is the regular close series adjusted for stock
     splits, but not for dividend reinvestment.  That is the right denominator
-    for a Seeking Alpha-style TTM yield chart.  Dividend events are normally
+    for a TTM yield chart.  Dividend events are normally
     returned on the same split-adjusted per-share basis, but some yfinance/Yahoo
     responses around ETF splits can contain pre-split cash amounts.  If a
     pre-split dividend is implausibly larger than the first post-split dividend,
@@ -156,29 +156,39 @@ def fetch_schd_history() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, str 
     return price_df.astype("float64"), dividends_df.astype("float64"), actions_df, fetched_at
 
 
-def _calculate_ttm_dividend(price_index: pd.DatetimeIndex, dividends_df: pd.DataFrame) -> pd.Series:
+def _calculate_latest_four_dividend_sum(price_index: pd.DatetimeIndex, dividends_df: pd.DataFrame) -> pd.Series:
+    """Return each price date's sum of the most recent four dividend events.
+
+    A 365-day trailing window can briefly include five regular quarterly
+    dividends around an ex-dividend date when the new dividend and the prior
+    year's same-quarter dividend both fall inside the lookback window.  Counting
+    exactly the latest four events as of each price date keeps the TTM dividend
+    on a regular quarterly cadence and removes one-day dividend-date needles.
+    """
     if dividends_df is None or dividends_df.empty:
         return pd.Series(np.nan, index=price_index, dtype="float64")
 
     dividends = dividends_df.copy().sort_index()
+    dividends.index = _to_naive_normalized_index(dividends.index)
     dividends["dividend"] = pd.to_numeric(dividends["dividend"], errors="coerce")
     dividends = dividends.dropna(subset=["dividend"])
     dividends = dividends[dividends["dividend"] > 0]
 
-    if dividends.empty:
+    if len(dividends) < 4:
         return pd.Series(np.nan, index=price_index, dtype="float64")
 
     div_dates = dividends.index.to_numpy(dtype="datetime64[ns]")
     div_values = dividends["dividend"].to_numpy(dtype="float64")
     cumulative = np.concatenate([[0.0], np.cumsum(div_values)])
 
-    ttm_values = []
-    for current_date in price_index:
-        current_np = np.datetime64(current_date)
-        start_np = np.datetime64(current_date - pd.Timedelta(days=365))
-        left = np.searchsorted(div_dates, start_np, side="right")
-        right = np.searchsorted(div_dates, current_np, side="right")
-        ttm_values.append(cumulative[right] - cumulative[left])
+    price_dates = pd.DatetimeIndex(price_index)
+    price_dates_np = _to_naive_normalized_index(price_dates).to_numpy(dtype="datetime64[ns]")
+    right_edges = np.searchsorted(div_dates, price_dates_np, side="right")
+
+    ttm_values = np.full(len(price_dates), np.nan, dtype="float64")
+    enough_dividends = right_edges >= 4
+    rights = right_edges[enough_dividends]
+    ttm_values[enough_dividends] = cumulative[rights] - cumulative[rights - 4]
 
     return pd.Series(ttm_values, index=price_index, dtype="float64")
 
@@ -208,7 +218,7 @@ def _build_spike_diagnostics(metrics: pd.DataFrame, dividends_df: pd.DataFrame) 
 def calculate_schd_dividend_yield() -> dict:
     price_df, dividends_df, actions_df, fetched_at = fetch_schd_history()
     metrics = price_df.copy()
-    metrics["ttm_dividend"] = _calculate_ttm_dividend(metrics.index, dividends_df)
+    metrics["ttm_dividend"] = _calculate_latest_four_dividend_sum(metrics.index, dividends_df)
     metrics["ttm_yield"] = np.where(
         (metrics["price"] > 0) & (metrics["ttm_dividend"] > 0),
         metrics["ttm_dividend"] / metrics["price"] * 100,
@@ -231,7 +241,7 @@ def calculate_schd_dividend_yield() -> dict:
     latest_date = valid.index.max()
     latest = valid.loc[latest_date]
     current_price = float(latest["price"])
-    recent_12m_dividend = float(latest["ttm_dividend"])
+    latest_four_dividend = float(latest["ttm_dividend"])
     current_ttm_yield = float(latest["ttm_yield"])
 
     if dividends_df is not None and not dividends_df.empty:
@@ -246,7 +256,7 @@ def calculate_schd_dividend_yield() -> dict:
 
     target_rows = []
     for target_yield in TARGET_YIELDS:
-        ttm_buy_price = recent_12m_dividend / target_yield if recent_12m_dividend > 0 else np.nan
+        ttm_buy_price = latest_four_dividend / target_yield if latest_four_dividend > 0 else np.nan
         quarter_buy_price = (
             recent_quarter_dividend * 4 / target_yield
             if recent_quarter_dividend is not None and recent_quarter_dividend > 0
@@ -271,7 +281,7 @@ def calculate_schd_dividend_yield() -> dict:
         "current_price": current_price,
         "current_ttm_yield": current_ttm_yield,
         "five_year_average_yield": five_year_average_yield,
-        "recent_12m_dividend": recent_12m_dividend,
+        "latest_four_dividend": latest_four_dividend,
         "recent_quarter_dividend": recent_quarter_dividend,
         "target_table": pd.DataFrame(target_rows),
         "fetched_at": fetched_at,
@@ -305,9 +315,9 @@ def apply_schd_styles() -> None:
 def render_metric_cards(data: dict) -> None:
     cards = [
         ("현재 SCHD 가격", _format_currency(data["current_price"]), f"기준일 {data['latest_date']:%Y-%m-%d}"),
-        ("현재 TTM 배당률", _format_percent(data["current_ttm_yield"]), "최근 12개월 배당금 ÷ 현재가"),
+        ("현재 TTM 배당률", _format_percent(data["current_ttm_yield"]), "최근 4회 배당금 ÷ 현재가"),
         ("5년 평균 배당률", _format_percent(data["five_year_average_yield"]), "일별 TTM 배당률 평균"),
-        ("최근 12개월 배당금", _format_currency(data["recent_12m_dividend"]), "최신일 기준 365일 합계"),
+        ("최근 4회 배당금", _format_currency(data["latest_four_dividend"]), "최신일 기준 최근 4개 배당 합계"),
         ("최근 분기 배당금", _format_currency(data["recent_quarter_dividend"]), "가장 최근 1회 배당"),
     ]
 
@@ -455,8 +465,8 @@ def main() -> None:
         st.caption(f"오류 정보: {exc}")
         return
 
-    if data["current_price"] <= 0 or data["recent_12m_dividend"] <= 0:
-        st.warning("SCHD 가격 또는 최근 12개월 배당금이 0 이하로 계산되어 일부 지표가 제한될 수 있습니다.")
+    if data["current_price"] <= 0 or data["latest_four_dividend"] <= 0:
+        st.warning("SCHD 가격 또는 최근 4회 배당금이 0 이하로 계산되어 일부 지표가 제한될 수 있습니다.")
 
     if data["current_ttm_yield"] < 1 or data["current_ttm_yield"] > 8:
         st.warning("최신 TTM 배당률이 일반적인 점검 범위(1%~8%) 밖입니다. 가격·배당 조정 기준을 확인해 주세요.")
@@ -485,10 +495,10 @@ def main() -> None:
         st.markdown(
             """
             - 현재 SCHD 가격: yfinance 일반 종가(`Close`, `auto_adjust=False`, split-adjusted)의 가장 최근 거래일 값
-            - 최근 12개월 배당금: 최신 가격일 기준 과거 365일 동안 지급된 split-adjusted SCHD 배당금 합계
-            - 각 날짜의 TTM 배당률: 해당 날짜 기준 과거 365일 split-adjusted 배당금 합계 ÷ 같은 기준의 종가 × 100
+            - 최근 4회 배당금: 최신 가격일 기준 가장 최근 4개 split-adjusted SCHD 배당금 합계
+            - 각 날짜의 TTM 배당률: 해당 날짜까지 발생한 SCHD 배당 이벤트 중 가장 최근 4회 split-adjusted 배당금 합계 ÷ 같은 기준의 종가 × 100
             - 5년 평균 배당률: 최근 5년 구간의 일별 TTM 배당률 평균
-            - TTM 기준 매수가: 최근 12개월 배당금 ÷ 목표 배당률
+            - TTM 기준 매수가: 최근 4회 배당금 ÷ 목표 배당률
             - 최근 분기×4 기준 매수가: 최근 분기 배당금 × 4 ÷ 목표 배당률
             - 데이터 오류 방어: 가격/배당 split 기준 불일치로 판단되는 1% 미만 또는 8% 초과 TTM 배당률은 차트와 평균 계산에서 제외
             """
