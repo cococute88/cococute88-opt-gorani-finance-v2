@@ -223,10 +223,28 @@ def build_price_map(
         fallback = last_trade if last_trade > 0 else avg_cost
         current_price = fetched if fetched > 0 else fallback
         price_source = "current" if fetched > 0 else ("last_trade" if last_trade > 0 else "avg_cost")
-        fx = 1.0 if row.get("currency") == "KRW" else to_float(usdkrw, 0.0) or to_float(row.get("last_exchange_rate"), 0.0)
+        currency = row.get("currency")
+        current_usdkrw = to_float(usdkrw, 0.0)
+        fx = 1.0 if currency == "KRW" else current_usdkrw or to_float(row.get("last_exchange_rate"), 0.0)
         current_value = current_price * to_float(row.get("quantity")) if current_price > 0 else None
         current_value_krw = current_value * fx if current_value is not None and fx > 0 else None
-        rows.append({**row, "current_price": current_price, "price_source": price_source, "fx_rate": fx, "current_value": current_value, "current_value_krw": current_value_krw})
+        if current_value is None:
+            current_value_usd = None
+        elif currency == "USD":
+            current_value_usd = current_value
+        elif current_usdkrw > 0:
+            current_value_usd = current_value / current_usdkrw
+        else:
+            current_value_usd = None
+        rows.append({
+            **row,
+            "current_price": current_price,
+            "price_source": price_source,
+            "fx_rate": fx,
+            "current_value": current_value,
+            "current_value_krw": current_value_krw,
+            "current_value_usd": current_value_usd,
+        })
     return pd.DataFrame(rows)
 
 
@@ -287,6 +305,97 @@ def normalize_targets(rows: list[dict[str, Any]] | None) -> list[dict[str, Any]]
         if info.display_ticker and target_qty > 0:
             cleaned.append({"asset_class": info.asset_class, "ticker": info.display_ticker, "fetch_ticker": info.fetch_ticker, "target_quantity": target_qty})
     return cleaned
+
+
+def _target_price_usd(
+    target: dict[str, Any],
+    enriched_holdings: pd.DataFrame,
+    usdkrw: float | None = None,
+    fetched_prices: dict[str, float] | None = None,
+) -> float:
+    """Return the target symbol's current unit price in USD when calculable."""
+    fetched_prices = fetched_prices or {}
+    asset_class = normalize_asset_class(target.get("asset_class"))
+    fetch_ticker = target.get("fetch_ticker") or normalize_ticker(target.get("ticker"), asset_class).fetch_ticker
+    display_ticker = target.get("ticker") or normalize_ticker(fetch_ticker, asset_class).display_ticker
+
+    price = to_float(fetched_prices.get(fetch_ticker), 0.0)
+    if price <= 0 and enriched_holdings is not None and not enriched_holdings.empty:
+        matches = enriched_holdings[
+            (enriched_holdings.get("asset_class") == asset_class)
+            & (enriched_holdings.get("ticker") == display_ticker)
+        ]
+        if not matches.empty:
+            row = matches.iloc[0]
+            price = to_float(row.get("current_price"), 0.0)
+            if price <= 0:
+                price = to_float(row.get("last_trade_price"), 0.0) or to_float(row.get("avg_cost"), 0.0)
+    if price <= 0:
+        return 0.0
+    if asset_class == "US":
+        return price
+    fx = to_float(usdkrw, 0.0)
+    return price / fx if fx > 0 else 0.0
+
+
+def compute_goal_achievement(
+    goal: dict[str, Any] | None,
+    enriched_holdings: pd.DataFrame,
+    usdkrw: float | None = None,
+    fetched_prices: dict[str, float] | None = None,
+) -> dict[str, Any]:
+    """Compute goal achievement using total portfolio USD value.
+
+    The achievement denominator is the target symbol's target quantity converted
+    to a USD goal amount at the current target-symbol price. The numerator is
+    the sum of every registered holding's USD valuation. KR/COIN holdings require
+    a current USDKRW rate for this USD-standard calculation.
+    """
+    targets = normalize_targets([goal] if goal else [])
+    if not targets:
+        return {"ok": False, "error": "저장된 목표 수량이 없습니다"}
+    target = targets[0]
+    target_qty = to_float(target.get("target_quantity"), 0.0)
+    if target_qty <= 0:
+        return {"ok": False, "error": "저장된 목표 수량이 없습니다"}
+
+    holdings_records = [] if enriched_holdings is None or enriched_holdings.empty else enriched_holdings.to_dict("records")
+    fx = to_float(usdkrw, 0.0)
+    needs_fx = target["asset_class"] != "US" or any(normalize_asset_class(row.get("asset_class")) != "US" for row in holdings_records)
+    if needs_fx and fx <= 0:
+        return {"ok": False, "error": "현재 USD 환율 조회 불가"}
+
+    target_price_usd = _target_price_usd(target, enriched_holdings, usdkrw, fetched_prices)
+    if target_price_usd <= 0:
+        return {"ok": False, "error": "목표 종목 현재가 조회 불가"}
+
+    portfolio_amount_usd = 0.0
+    actual_target_qty = 0.0
+    for row in holdings_records:
+        qty = to_float(row.get("quantity"), 0.0)
+        if normalize_asset_class(row.get("asset_class")) == target["asset_class"] and row.get("ticker") == target["ticker"]:
+            actual_target_qty += qty
+        value_usd = row.get("current_value_usd")
+        if pd.notna(value_usd):
+            portfolio_amount_usd += to_float(value_usd, 0.0)
+
+    target_amount_usd = target_price_usd * target_qty
+    equivalent_target_qty = portfolio_amount_usd / target_price_usd if target_price_usd > 0 else 0.0
+    return {
+        "ok": True,
+        "target_symbol": target["ticker"],
+        "target_asset_class": target["asset_class"],
+        "target_quantity": target_qty,
+        "target_price_usd": target_price_usd,
+        "target_amount_usd": target_amount_usd,
+        "portfolio_amount_usd": portfolio_amount_usd,
+        "achievement_pct": min(portfolio_amount_usd / target_amount_usd * 100.0, 100.0) if target_amount_usd > 0 else 0.0,
+        "actual_target_symbol_quantity": actual_target_qty,
+        "equivalent_target_quantity": equivalent_target_qty,
+        "remaining_actual_quantity": max(target_qty - actual_target_qty, 0.0),
+        "remaining_equivalent_quantity": max(target_qty - equivalent_target_qty, 0.0),
+        "remaining_amount_usd": max(target_amount_usd - portfolio_amount_usd, 0.0),
+    }
 
 
 def calculate_target_progress(holdings: pd.DataFrame, targets: list[dict[str, Any]] | None) -> pd.DataFrame:

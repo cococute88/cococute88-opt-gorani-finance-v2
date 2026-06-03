@@ -13,7 +13,7 @@ from core.sync import _safe_uid
 from logic.dividend_ledger import (
     ASSET_CLASS_LABELS,
     build_price_map,
-    calculate_target_progress,
+    compute_goal_achievement,
     estimate_monthly_dividends,
     normalize_targets,
     normalize_ticker,
@@ -169,6 +169,17 @@ def fmt_pct(value) -> str:
     return f"{to_float(value, 0.0):.1f}%"
 
 
+def fmt_usd_whole(value) -> str:
+    return f"${int(round(to_float(value, 0.0))):,}"
+
+
+def fmt_goal_quantity(value) -> str:
+    value = to_float(value, 0.0)
+    if abs(value - round(value)) < 1e-9:
+        return f"{int(round(value)):,}"
+    return f"{value:,.1f}".rstrip("0").rstrip(".")
+
+
 def metric_card(label: str, value: str, sub: str = "", accent: bool = False) -> None:
     cls = "toss-metric accent" if accent else "toss-metric"
     st.markdown(
@@ -183,39 +194,22 @@ def metric_card(label: str, value: str, sub: str = "", accent: bool = False) -> 
     )
 
 
-def build_target_summary(progress: pd.DataFrame, priced_holdings: pd.DataFrame) -> tuple[str, str]:
-    if progress is not None and not progress.empty:
-        row = progress.sort_values("progress_pct", ascending=False).iloc[0]
+def build_target_summary(goal_achievement: dict, priced_holdings: pd.DataFrame) -> tuple[str, str]:
+    if goal_achievement.get("ok"):
         return (
-            fmt_pct(row["progress_pct"]),
-            f"{row['ticker']} {fmt_quantity(row['quantity'])} / {fmt_quantity(row['target_quantity'])}주",
+            fmt_pct(goal_achievement.get("achievement_pct")),
+            (
+                f"{fmt_goal_quantity(goal_achievement.get('equivalent_target_quantity'))}"
+                f"({fmt_goal_quantity(goal_achievement.get('actual_target_symbol_quantity'))})"
+                f" / {fmt_goal_quantity(goal_achievement.get('target_quantity'))}주"
+            ),
         )
+    if goal_achievement.get("error"):
+        return "-", str(goal_achievement.get("error"))
     if priced_holdings is not None and not priced_holdings.empty:
         total = pd.to_numeric(priced_holdings.get("current_value_krw", pd.Series(dtype="float64")), errors="coerce").dropna().sum()
         return "-", f"현재 평가금액 {fmt_won(total)}"
     return "-", "저장된 목표 수량이 없습니다"
-
-
-def build_target_price_lookup(priced_holdings: pd.DataFrame) -> dict[tuple[str, str], dict[str, float | str]]:
-    if priced_holdings is None or priced_holdings.empty:
-        return {}
-    lookup = {}
-    for row in priced_holdings.to_dict("records"):
-        key = (row.get("asset_class"), row.get("ticker"))
-        price = to_float(row.get("current_price"), 0.0)
-        if price <= 0:
-            price = to_float(row.get("last_trade_price"), 0.0) or to_float(row.get("avg_cost"), 0.0)
-        lookup[key] = {"price": price, "currency": row.get("currency") or "KRW"}
-    return lookup
-
-
-def format_remaining_amount(row: dict, price_lookup: dict[tuple[str, str], dict[str, float | str]]) -> str:
-    price_info = price_lookup.get((row.get("asset_class"), row.get("ticker")), {})
-    price = to_float(price_info.get("price"), 0.0)
-    if price <= 0:
-        return "남은 금액 계산 불가"
-    currency = "USD" if row.get("asset_class") == "US" else "KRW"
-    return fmt_remaining_money(to_float(row.get("remaining_quantity"), 0.0) * price, currency)
 
 
 def add_weight_column(df: pd.DataFrame) -> pd.DataFrame:
@@ -262,7 +256,9 @@ with control_right:
             st.rerun()
 
 holdings = summarize_holdings(ledger["transactions"])
-fetch_tickers = tuple(sorted(set(holdings["fetch_ticker"].dropna().tolist()))) if not holdings.empty else tuple()
+holding_fetch_tickers = holdings["fetch_ticker"].dropna().tolist() if not holdings.empty else []
+target_fetch_tickers = [target.get("fetch_ticker") for target in ledger.get("targets", []) if target.get("fetch_ticker")]
+fetch_tickers = tuple(sorted(set(holding_fetch_tickers + target_fetch_tickers)))
 price_error = None
 fx_error = None
 try:
@@ -292,22 +288,25 @@ except Exception:
 monthly = estimate_monthly_dividends(priced_holdings, dividend_histories, usdkrw)
 value_col = "gross_krw" if ledger["settings"].get("display_basis") == "gross" else "net_krw"
 basis_text = "세전" if value_col == "gross_krw" else "세후"
-progress = calculate_target_progress(holdings, ledger["targets"])
+primary_goal = ledger["targets"][0] if ledger.get("targets") else None
+goal_achievement = compute_goal_achievement(primary_goal, priced_holdings, usdkrw, fetched_prices)
 
 if price_error:
     st.warning(f"현재가 조회 일부 실패: 마지막 거래 단가를 fallback으로 사용합니다. ({price_error})")
 if fx_error or usdkrw is None:
     st.info("환율 조회 실패 시 임의 고정 환율을 쓰지 않고, 저장된 거래 환율이 있는 USD 종목만 원화 환산합니다.")
 else:
-    st.caption("환율은 USD 종목 원화 환산 계산에만 사용됩니다.")
+    st.caption("환율은 원화와 달러 평가금액 환산에 사용됩니다.")
 
 st.markdown("### 📌 요약")
 m1, m2, m3, m4 = st.columns(4)
 convertible_values = pd.to_numeric(priced_holdings.get("current_value_krw", pd.Series(dtype="float64")), errors="coerce").dropna() if not priced_holdings.empty else pd.Series(dtype="float64")
 monthly_total = to_float(monthly[value_col].sum(), 0.0) if not monthly.empty else 0.0
-target_value, target_sub = build_target_summary(progress, priced_holdings)
+target_value, target_sub = build_target_summary(goal_achievement, priced_holdings)
+portfolio_usd_values = pd.to_numeric(priced_holdings.get("current_value_usd", pd.Series(dtype="float64")), errors="coerce").dropna() if not priced_holdings.empty else pd.Series(dtype="float64")
+valuation_sub = f"달러 기준 {fmt_usd_whole(portfolio_usd_values.sum())}" if usdkrw is not None else "현재 USD 환율 조회 불가"
 with m1:
-    metric_card("평가금액(환산 가능분)", fmt_won(convertible_values.sum()), "USD 환율 없으면 해당 종목 제외", True)
+    metric_card("평가금액(환산 가능분)", fmt_won(convertible_values.sum()), valuation_sub, True)
 with m2:
     metric_card(f"연간 예상 배당({basis_text})", fmt_won(monthly_total), "최근 배당 이력 기반 추정")
 with m3:
@@ -331,23 +330,26 @@ fig.update_xaxes(type="category", categoryorder="array", categoryarray=[str(i) f
 st.plotly_chart(fig, use_container_width=True)
 st.caption("배당 이력이 제공되는 종목의 과거 월별 배당을 보유 수량에 적용한 추정치입니다. 실제 지급액과 지급월은 달라질 수 있습니다.")
 
-st.markdown("### 🎯 목표 수량")
-if progress.empty:
+st.markdown("### 🎯 목표 달성도")
+if not ledger.get("targets"):
     st.caption("저장된 목표 수량이 없습니다. 예: SCHD 목표 3300주")
+elif not goal_achievement.get("ok"):
+    st.warning(goal_achievement.get("error", "목표 달성도 계산 불가"))
 else:
-    target_price_lookup = build_target_price_lookup(priced_holdings)
-    for row in progress.to_dict("records"):
-        pct = to_float(row["progress_pct"])
-        remaining_amount = format_remaining_amount(row, target_price_lookup)
-        st.progress(
-            min(pct / 100.0, 1.0),
-            text=(
-                f"{row['ticker']} {fmt_quantity(row['quantity'])} / {fmt_quantity(row['target_quantity'])}주"
-                f" · 남은 수량 {fmt_quantity(row['remaining_quantity'])}주"
-                f" · 남은 금액 {remaining_amount}"
-                f" · 달성률 {pct:.1f}%"
-            ),
-        )
+    pct = to_float(goal_achievement.get("achievement_pct"))
+    target_line = f"{goal_achievement['target_symbol']} {fmt_goal_quantity(goal_achievement['target_quantity'])}주"
+    st.progress(
+        min(pct / 100.0, 1.0),
+        text=(
+            f"{target_line}"
+            f" · 목표금액 {fmt_usd_whole(goal_achievement.get('target_amount_usd'))}"
+            f" · 현재 달성금액 {fmt_usd_whole(goal_achievement.get('portfolio_amount_usd'))}"
+            f" · 남은 수량 {fmt_goal_quantity(goal_achievement.get('remaining_actual_quantity'))}주"
+            f"(환산시 {fmt_goal_quantity(goal_achievement.get('remaining_equivalent_quantity'))}주)"
+            f" · 남은 금액 {fmt_usd_whole(goal_achievement.get('remaining_amount_usd'))}"
+            f" · 달성률 {pct:.1f}%"
+        ),
+    )
 
 st.markdown("### ✍️ 거래 입력")
 with st.form("dividend_ledger_add_transaction", clear_on_submit=True):
@@ -390,8 +392,9 @@ else:
     display_holdings["현재가"] = [fmt_money(v, c) for v, c in zip(display_holdings["current_price"], display_holdings["currency"])]
     display_holdings["비중"] = display_holdings["weight_pct"].apply(fmt_pct)
     display_holdings["평가금액(KRW)"] = display_holdings["current_value_krw"].apply(lambda x: fmt_won(x) if pd.notna(x) else "환율 필요")
+    display_holdings["평가금액(USD)"] = display_holdings["current_value_usd"].apply(lambda x: fmt_usd_whole(x) if pd.notna(x) else "현재 USD 환율 조회 불가")
     st.dataframe(
-        display_holdings[["자산", "ticker", "name", "수량", "평균단가", "현재가", "비중", "평가금액(KRW)"]],
+        display_holdings[["자산", "ticker", "name", "수량", "평균단가", "현재가", "비중", "평가금액(KRW)", "평가금액(USD)"]],
         use_container_width=True,
         hide_index=True,
     )
