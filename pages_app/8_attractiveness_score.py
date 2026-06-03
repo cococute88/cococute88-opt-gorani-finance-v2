@@ -1,3 +1,4 @@
+import html
 import importlib.util
 import os
 from datetime import datetime, timedelta, timezone
@@ -296,40 +297,72 @@ def apply_schd_styles() -> None:
     st.markdown(
         """
         <style>
-            .schd-ttm-card {
-                border: 1px solid rgba(16, 24, 40, 0.08);
-                border-radius: 12px;
-                padding: 13px 16px 12px;
-                min-height: 112px;
+            .schd-yield-card {
+                background: #ffffff;
+                border: 1px solid #eaecf0;
+                border-radius: 18px;
                 box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
-                margin-bottom: 8px;
+                min-height: 134px;
+                padding: 16px 14px 14px;
+                margin-bottom: 10px;
+                display: flex;
+                flex-direction: column;
+                justify-content: center;
+                align-items: center;
+                text-align: center;
+                gap: 7px;
             }
-            .schd-ttm-card__label {
+            .schd-yield-card-label {
                 color: #667085;
-                font-size: 0.875rem;
+                font-size: 0.86rem;
+                font-weight: 700;
+                line-height: 1.25;
+                min-height: 1.1rem;
+            }
+            .schd-yield-card-value {
+                color: #191f28;
+                font-size: clamp(1.42rem, 2.3vw, 1.92rem);
+                font-weight: 800;
+                letter-spacing: -0.035em;
+                line-height: 1.12;
+                word-break: keep-all;
+            }
+            .schd-yield-card-subtext {
+                color: #667085;
+                font-size: 0.76rem;
                 font-weight: 600;
-                margin-bottom: 8px;
+                line-height: 1.32;
+                min-height: 2.05rem;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                text-align: center;
+                word-break: keep-all;
             }
-            .schd-ttm-card__value {
-                font-size: 2rem;
-                font-weight: 750;
-                letter-spacing: -0.03em;
-                line-height: 1.15;
-                margin-bottom: 9px;
+            .schd-yield-card-subtext:empty::after {
+                content: "\\00a0";
             }
-            .schd-ttm-card__help {
-                color: #475467;
-                font-size: 0.78rem;
-                line-height: 1.35;
+            @media (max-width: 640px) {
+                .schd-yield-card {
+                    min-height: 122px;
+                    padding: 15px 14px 13px;
+                }
+                .schd-yield-card-value {
+                    font-size: 1.65rem;
+                }
+                .schd-yield-card-subtext {
+                    min-height: 1.8rem;
+                }
             }
             @media (prefers-color-scheme: dark) {
-                .schd-ttm-card {
-                    border-color: rgba(255, 255, 255, 0.12);
+                .schd-yield-card {
+                    background: #ffffff;
+                    border-color: #eaecf0;
                     box-shadow: none;
                 }
-                .schd-ttm-card__label,
-                .schd-ttm-card__help {
-                    color: #344054;
+                .schd-yield-card-label,
+                .schd-yield-card-subtext {
+                    color: #667085;
                 }
             }
             .schd-reference-link {
@@ -346,48 +379,105 @@ def apply_schd_styles() -> None:
     )
 
 
-def _get_ttm_yield_card_style(ttm_yield: float) -> tuple[str, str, str]:
+def _get_ttm_yield_card_style(ttm_yield: float) -> tuple[str, str, str, str]:
     if ttm_yield is None or pd.isna(ttm_yield) or not np.isfinite(ttm_yield):
-        return "#F2F4F7", "#344054", "계산 대기"
+        return "#F2F4F7", "#344054", "#D0D5DD", "계산 대기"
     if ttm_yield < 3.4:
-        return "#FDECEC", "#DC2626", "🟥비싸요"
+        return "#FDECEC", "#DC2626", "#FCA5A5", "🟥 비싸요"
     if ttm_yield < 3.5:
-        return "#FFF3E0", "#EA580C", "🟡진입고려"
+        return "#FFF3E0", "#EA580C", "#FDBA74", "🟧 진입고려"
     if ttm_yield < 3.6:
-        return "#FEF9C3", "#CA8A04", "🟢진입OK"
+        return "#FEF9C3", "#CA8A04", "#FDE68A", "🟨 진입OK"
     if ttm_yield < 3.7:
-        return "#ECFCCB", "#65A30D", "💚매수GO"
+        return "#ECFCCB", "#65A30D", "#BEF264", "🟩 매수GO"
     if ttm_yield < 3.8:
-        return "#DCFCE7", "#16A34A", "💚매수가자🎉"
-    return "#D1FAE5", "#047857", "강함"
+        return "#DCFCE7", "#16A34A", "#86EFAC", "💚 매수가자"
+    return "#D1FAE5", "#047857", "#6EE7B7", "💚 강함"
 
 
-def render_ttm_yield_card(column, data: dict) -> None:
-    background_color, value_color, status = _get_ttm_yield_card_style(data["current_ttm_yield"])
+def _render_metric_card(
+    column,
+    label: str,
+    value: str,
+    subtext: str = "",
+    bg_color: str = "#ffffff",
+    value_color: str = "#191f28",
+    border_color: str = "#eaecf0",
+) -> None:
+    safe_label = html.escape(str(label))
+    safe_value = html.escape(str(value))
+    safe_subtext = html.escape(str(subtext))
     column.markdown(
         f'''
-        <div class="schd-ttm-card" style="background: {background_color};">
-            <div class="schd-ttm-card__label">현재 TTM 배당률</div>
-            <div class="schd-ttm-card__value" style="color: {value_color};">{_format_percent(data["current_ttm_yield"])}</div>
-            <div class="schd-ttm-card__help">현재는 · {status}</div>
+        <div class="schd-yield-card" style="background: {bg_color}; border-color: {border_color};">
+            <div class="schd-yield-card-label">{safe_label}</div>
+            <div class="schd-yield-card-value" style="color: {value_color};">{safe_value}</div>
+            <div class="schd-yield-card-subtext">{safe_subtext}</div>
         </div>
         ''',
         unsafe_allow_html=True,
     )
 
 
+def _build_target_price_summary(target_table: pd.DataFrame) -> str:
+    if target_table is None or target_table.empty:
+        return ""
+    if not {"목표 배당률", "TTM 기준 매수가"}.issubset(target_table.columns):
+        return ""
+
+    summary_parts = []
+    for target_label in ("3.5%", "3.6%", "3.7%"):
+        matched = target_table.loc[target_table["목표 배당률"] == target_label, "TTM 기준 매수가"]
+        if matched.empty:
+            summary_parts.append(f"{target_label} -")
+            continue
+
+        target_price = matched.iloc[0]
+        if target_price is None or pd.isna(target_price) or str(target_price).strip() in {"", "-"}:
+            summary_parts.append(f"{target_label} -")
+        else:
+            summary_parts.append(f"{target_label} {target_price}")
+
+    return " · ".join(summary_parts)
+
+
 def render_metric_cards(data: dict) -> None:
+    background_color, value_color, border_color, status = _get_ttm_yield_card_style(data["current_ttm_yield"])
+    price_summary = _build_target_price_summary(data["target_table"])
     cards = [
-        ("현재 SCHD 가격", _format_currency(data["current_price"]), f"기준일 {data['latest_date']:%Y-%m-%d}"),
-        ("5년 평균 배당률", _format_percent(data["five_year_average_yield"]), "일별 TTM 배당률 평균"),
-        ("최근 4회 배당금", _format_currency(data["latest_four_dividend"]), "최신일 기준 최근 4개 배당 합계"),
-        ("최근 분기 배당금", _format_currency(data["recent_quarter_dividend"]), "가장 최근 1회 배당"),
+        {
+            "label": "현재 TTM 배당률",
+            "value": _format_percent(data["current_ttm_yield"]),
+            "subtext": f"현재는 · {status}",
+            "bg_color": background_color,
+            "value_color": value_color,
+            "border_color": border_color,
+        },
+        {
+            "label": "현재 SCHD 가격",
+            "value": _format_currency(data["current_price"]),
+            "subtext": price_summary or f"기준일 {data['latest_date']:%Y-%m-%d}",
+        },
+        {
+            "label": "5년 평균 배당률",
+            "value": _format_percent(data["five_year_average_yield"]),
+            "subtext": "일별 TTM 배당률 평균",
+        },
+        {
+            "label": "최근 4회 배당금",
+            "value": _format_currency(data["latest_four_dividend"]),
+            "subtext": "최신일 기준 최근 4개 배당 합계",
+        },
+        {
+            "label": "최근 분기 배당금",
+            "value": _format_currency(data["recent_quarter_dividend"]),
+            "subtext": "가장 최근 1회 배당",
+        },
     ]
 
-    columns = st.columns(5)
-    render_ttm_yield_card(columns[0], data)
-    for column, (label, value, sub) in zip(columns[1:], cards, strict=True):
-        column.metric(label=label, value=value, help=sub, border=True)
+    columns = st.columns(5, gap="small")
+    for column, card in zip(columns, cards, strict=True):
+        _render_metric_card(column, **card)
 
 
 def _filter_period(metrics: pd.DataFrame, latest_date: pd.Timestamp, selected_period: str) -> pd.DataFrame:
