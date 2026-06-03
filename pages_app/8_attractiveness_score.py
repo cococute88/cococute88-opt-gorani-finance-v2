@@ -350,7 +350,7 @@ def _get_ttm_yield_card_style(ttm_yield: float) -> tuple[str, str, str]:
     if ttm_yield is None or pd.isna(ttm_yield) or not np.isfinite(ttm_yield):
         return "#F2F4F7", "#344054", "계산 대기"
     if ttm_yield < 3.4:
-        return "#FDECEC", "#DC2626", "🟥주의"
+        return "#FDECEC", "#DC2626", "🟥비싸요"
     if ttm_yield < 3.5:
         return "#FFF3E0", "#EA580C", "🟡진입고려"
     if ttm_yield < 3.6:
@@ -369,7 +369,7 @@ def render_ttm_yield_card(column, data: dict) -> None:
         <div class="schd-ttm-card" style="background: {background_color};">
             <div class="schd-ttm-card__label">현재 TTM 배당률</div>
             <div class="schd-ttm-card__value" style="color: {value_color};">{_format_percent(data["current_ttm_yield"])}</div>
-            <div class="schd-ttm-card__help">최근 4회 배당금 ÷ 현재가 · {status}</div>
+            <div class="schd-ttm-card__help">현재 단계 · {status}</div>
         </div>
         ''',
         unsafe_allow_html=True,
