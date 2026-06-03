@@ -241,8 +241,8 @@ def estimate_monthly_dividends(
     """
     dividend_history = dividend_history or {}
     tax_rates = {**DEFAULT_TAX_RATES, **(tax_rates or {})}
-    months = pd.period_range(pd.Timestamp.today().to_period("M"), periods=12, freq="M")
-    result = pd.DataFrame({"month": [str(m) for m in months], "gross_krw": 0.0, "net_krw": 0.0})
+    month_numbers = list(range(1, 13))
+    result = pd.DataFrame({"month": [str(m) for m in month_numbers], "gross_krw": 0.0, "net_krw": 0.0})
     if holdings is None or holdings.empty:
         return result
 
@@ -265,8 +265,8 @@ def estimate_monthly_dividends(
         if fx <= 0:
             continue
         tax_rate = tax_rates.get(row.get("asset_class"), 0.0)
-        for idx, period in enumerate(months):
-            per_share = to_float(monthly.get(period.month), 0.0)
+        for idx, month_number in enumerate(month_numbers):
+            per_share = to_float(monthly.get(month_number), 0.0)
             gross = per_share * qty * fx
             result.loc[idx, "gross_krw"] += gross
             result.loc[idx, "net_krw"] += gross * (1.0 - tax_rate)
