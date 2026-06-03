@@ -183,7 +183,7 @@ def _calculate_52w_high_drawdown(
     if last_52w_df.empty:
         return np.nan, np.nan
 
-    high_col = "High" if "High" in price_df.columns and not price_df["High"].dropna().empty else "Close"
+    high_col = "High" if "High" in last_52w_df.columns and not last_52w_df["High"].dropna().empty else "Close"
     high_52w = np.nan
     for candidate_col in [high_col, "Close"]:
         if candidate_col not in last_52w_df.columns:
