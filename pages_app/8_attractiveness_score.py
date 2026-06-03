@@ -489,7 +489,7 @@ def main() -> None:
     apply_schd_styles()
 
     st.markdown("# 📈 SCHD 배당률 매수 판단")
-    st.caption("색상 기준: 3.4% 미만 주의, 3.5% 이상 진입, 3.6% 이상 관심, 3.7% 이상 우수, 3.8% 이상 강함")
+    st.caption("판별: 3.4% 미만(❌), 3.5%~(진입고려🟡), 3.6%~(진입OK🟢), 3.7%~(매수GOOD💚)")
 
     try:
         with st.spinner("SCHD 가격·배당 데이터를 불러오는 중입니다..."):
