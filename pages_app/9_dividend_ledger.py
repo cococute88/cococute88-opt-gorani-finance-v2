@@ -28,7 +28,6 @@ LEDGER_PATH = "dividend_ledger"
 CACHE_TTL_SECONDS = 60 * 60
 KST = timezone(timedelta(hours=9))
 ASSET_CLASS_OPTIONS = ["US", "KR", "COIN"]
-SIDE_OPTIONS = ["BUY", "SELL"]
 DEFAULT_LEDGER = {"transactions": [], "targets": [], "settings": {"display_basis": "net"}}
 
 
@@ -153,9 +152,21 @@ def fmt_money(value, currency: str) -> str:
     return f"{int(round(value)):,}원"
 
 
+def fmt_remaining_money(value, currency: str) -> str:
+    value = int(round(to_float(value, 0.0)))
+    if currency == "USD":
+        return f"${value:,}"
+    return f"₩{value:,}"
+
+
 def fmt_quantity(value) -> str:
     value = to_float(value, 0.0)
-    return f"{value:,.4g}"
+    text = f"{value:,.4f}".rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def fmt_pct(value) -> str:
+    return f"{to_float(value, 0.0):.1f}%"
 
 
 def metric_card(label: str, value: str, sub: str = "", accent: bool = False) -> None:
@@ -176,13 +187,45 @@ def build_target_summary(progress: pd.DataFrame, priced_holdings: pd.DataFrame) 
     if progress is not None and not progress.empty:
         row = progress.sort_values("progress_pct", ascending=False).iloc[0]
         return (
-            f"{to_float(row['progress_pct']):.1f}%",
+            fmt_pct(row["progress_pct"]),
             f"{row['ticker']} {fmt_quantity(row['quantity'])} / {fmt_quantity(row['target_quantity'])}주",
         )
     if priced_holdings is not None and not priced_holdings.empty:
         total = pd.to_numeric(priced_holdings.get("current_value_krw", pd.Series(dtype="float64")), errors="coerce").dropna().sum()
         return "-", f"현재 평가금액 {fmt_won(total)}"
     return "-", "저장된 목표 수량이 없습니다"
+
+
+def build_target_price_lookup(priced_holdings: pd.DataFrame) -> dict[tuple[str, str], dict[str, float | str]]:
+    if priced_holdings is None or priced_holdings.empty:
+        return {}
+    lookup = {}
+    for row in priced_holdings.to_dict("records"):
+        key = (row.get("asset_class"), row.get("ticker"))
+        price = to_float(row.get("current_price"), 0.0)
+        if price <= 0:
+            price = to_float(row.get("last_trade_price"), 0.0) or to_float(row.get("avg_cost"), 0.0)
+        lookup[key] = {"price": price, "currency": row.get("currency") or "KRW"}
+    return lookup
+
+
+def format_remaining_amount(row: dict, price_lookup: dict[tuple[str, str], dict[str, float | str]]) -> str:
+    price_info = price_lookup.get((row.get("asset_class"), row.get("ticker")), {})
+    price = to_float(price_info.get("price"), 0.0)
+    if price <= 0:
+        return "남은 금액 계산 불가"
+    currency = "USD" if row.get("asset_class") == "US" else "KRW"
+    return fmt_remaining_money(to_float(row.get("remaining_quantity"), 0.0) * price, currency)
+
+
+def add_weight_column(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return df
+    result = df.copy()
+    values = pd.to_numeric(result.get("current_value_krw", pd.Series(dtype="float64")), errors="coerce")
+    total = values.dropna().sum()
+    result["weight_pct"] = values.apply(lambda value: (value / total * 100.0) if pd.notna(value) and total > 0 else 0.0)
+    return result
 
 
 if _ledger_state_key() not in st.session_state:
@@ -232,7 +275,7 @@ try:
 except Exception as exc:
     usdkrw = None
     fx_error = str(exc)
-priced_holdings = build_price_map(holdings, fetched_prices, usdkrw)
+priced_holdings = add_weight_column(build_price_map(holdings, fetched_prices, usdkrw))
 try:
     symbol_names = fetch_symbol_names(fetch_tickers)
 except Exception:
@@ -292,25 +335,29 @@ st.markdown("### 🎯 목표 수량")
 if progress.empty:
     st.caption("저장된 목표 수량이 없습니다. 예: SCHD 목표 3300주")
 else:
+    target_price_lookup = build_target_price_lookup(priced_holdings)
     for row in progress.to_dict("records"):
         pct = to_float(row["progress_pct"])
+        remaining_amount = format_remaining_amount(row, target_price_lookup)
         st.progress(
             min(pct / 100.0, 1.0),
-            text=f"{row['ticker']} {fmt_quantity(row['quantity'])} / {fmt_quantity(row['target_quantity'])}주 · 남은 수량 {fmt_quantity(row['remaining_quantity'])}주 · 달성률 {pct:.1f}%",
+            text=(
+                f"{row['ticker']} {fmt_quantity(row['quantity'])} / {fmt_quantity(row['target_quantity'])}주"
+                f" · 남은 수량 {fmt_quantity(row['remaining_quantity'])}주"
+                f" · 남은 금액 {remaining_amount}"
+                f" · 달성률 {pct:.1f}%"
+            ),
         )
 
 st.markdown("### ✍️ 거래 입력")
 with st.form("dividend_ledger_add_transaction", clear_on_submit=True):
-    c1, c2, c3 = st.columns([1.1, 1.2, 1])
+    c1, c2, c3, c4, c5 = st.columns([1.3, 1.3, 1, 1, 0.9])
     asset_class = c1.selectbox("자산 구분", ASSET_CLASS_OPTIONS, format_func=lambda x: ASSET_CLASS_LABELS[x])
     ticker = c2.text_input("티커", value="SCHD", help="US 예: SCHD, TQQQ, MSFT / 국내 예: 069500, 458730 / 코인 예: BTC")
-    side = c3.selectbox("구분", SIDE_OPTIONS, format_func=lambda x: "매수" if x == "BUY" else "매도")
+    quantity = c3.number_input("수량", min_value=0.0, value=0.0, step=0.01, format="%.2f")
+    price = c4.number_input("거래 단가", min_value=0.0, value=0.0, step=0.01, format="%.2f", help="US는 달러 단가, 국내/코인은 원화 단가입니다.")
 
-    c4, c5 = st.columns(2)
-    quantity = c4.number_input("수량", min_value=0.0, value=0.0, step=0.01, format="%.6f")
-    price = c5.number_input("거래 단가", min_value=0.0, value=0.0, step=1.0, format="%.4f", help="US는 달러 단가, 국내/코인은 원화 단가입니다.")
-
-    submitted = st.form_submit_button("➕ 거래 추가", type="primary", use_container_width=True)
+    submitted = c5.form_submit_button("➕ 거래 추가", type="primary", use_container_width=True)
     if submitted:
         info = normalize_ticker(ticker, asset_class)
         item = {
@@ -318,7 +365,7 @@ with st.form("dividend_ledger_add_transaction", clear_on_submit=True):
             "date": datetime.now(KST).date().isoformat(),
             "asset_class": info.asset_class,
             "ticker": info.display_ticker,
-            "side": side,
+            "side": "BUY",
             "quantity": quantity,
             "price": price,
         }
@@ -338,53 +385,65 @@ if priced_holdings.empty:
 else:
     display_holdings = priced_holdings.copy()
     display_holdings["자산"] = display_holdings["asset_class"].map(ASSET_CLASS_LABELS)
-    display_holdings["수량"] = display_holdings["quantity"]
+    display_holdings["수량"] = display_holdings["quantity"].apply(fmt_quantity)
     display_holdings["평균단가"] = [fmt_money(v, c) for v, c in zip(display_holdings["avg_cost"], display_holdings["currency"])]
     display_holdings["현재가"] = [fmt_money(v, c) for v, c in zip(display_holdings["current_price"], display_holdings["currency"])]
-    display_holdings["가격출처"] = display_holdings["price_source"].map({"current": "현재가", "last_trade": "마지막 거래 단가"})
+    display_holdings["비중"] = display_holdings["weight_pct"].apply(fmt_pct)
     display_holdings["평가금액(KRW)"] = display_holdings["current_value_krw"].apply(lambda x: fmt_won(x) if pd.notna(x) else "환율 필요")
     st.dataframe(
-        display_holdings[["자산", "ticker", "name", "수량", "평균단가", "현재가", "가격출처", "평가금액(KRW)"]],
+        display_holdings[["자산", "ticker", "name", "수량", "평균단가", "현재가", "비중", "평가금액(KRW)"]],
         use_container_width=True,
         hide_index=True,
     )
 
-st.markdown("### 💼 거래 내역 관리")
+st.markdown("### 💼 보유 종목 관리")
 if ledger["transactions"]:
     tx_df = pd.DataFrame(ledger["transactions"])
     tx_df["delete"] = False
-    visible_columns = ["delete", "date", "asset_class", "ticker", "side", "quantity", "price", "id"]
+    weight_by_ticker = {}
+    if priced_holdings is not None and not priced_holdings.empty:
+        weight_by_ticker = {
+            (row.get("asset_class"), row.get("ticker")): fmt_pct(row.get("weight_pct"))
+            for row in priced_holdings.to_dict("records")
+        }
+    tx_df["weight"] = tx_df.apply(lambda row: weight_by_ticker.get((row.get("asset_class"), row.get("ticker")), "0.0%"), axis=1)
+    editor_columns = ["delete", "date", "asset_class", "ticker", "quantity", "price", "weight", "id", "side"]
     edited = st.data_editor(
-        tx_df[visible_columns],
+        tx_df[editor_columns],
         hide_index=True,
         use_container_width=True,
         column_config={
             "delete": st.column_config.CheckboxColumn("삭제"),
-            "date": st.column_config.DateColumn("거래일", disabled=True),
+            "date": st.column_config.DateColumn("등록일", disabled=True),
             "asset_class": st.column_config.SelectboxColumn("자산 구분", options=ASSET_CLASS_OPTIONS),
-            "side": st.column_config.SelectboxColumn("구분", options=SIDE_OPTIONS),
-            "id": st.column_config.TextColumn("id", disabled=True),
+            "ticker": st.column_config.TextColumn("티커"),
+            "quantity": st.column_config.NumberColumn("수량", format="%.2f"),
+            "price": st.column_config.NumberColumn("평단가", format="%.2f"),
+            "weight": st.column_config.TextColumn("비중", disabled=True),
+            "id": None,
+            "side": None,
         },
+        column_order=["delete", "date", "asset_class", "ticker", "quantity", "price", "weight"],
     )
     c_save, c_delete = st.columns(2)
     original_by_id = {str(row.get("id")): row for row in ledger["transactions"]}
-    if c_save.button("💾 거래 내역 수정 저장", use_container_width=True):
+    if c_save.button("💾 보유 종목 수정 저장", use_container_width=True):
         rows = []
-        for row in edited.drop(columns=["delete"]).to_dict("records"):
+        for row in edited.drop(columns=["delete", "weight"], errors="ignore").to_dict("records"):
             original = original_by_id.get(str(row.get("id")), {})
             rows.append({**original, **row})
         ledger["transactions"] = normalize_transactions(rows)
         save_ledger(ledger)
-        st.toast("거래 내역을 저장했습니다.", icon="✅")
+        st.toast("보유 종목을 저장했습니다.", icon="✅")
         st.rerun()
-    if c_delete.button("🗑️ 선택 거래 삭제", use_container_width=True):
+    if c_delete.button("🗑️ 선택 종목 삭제", use_container_width=True):
         keep_ids = set(edited.loc[edited["delete"] != True, "id"].astype(str).tolist())  # noqa: E712
         ledger["transactions"] = normalize_transactions([row for row in ledger["transactions"] if str(row.get("id")) in keep_ids])
         save_ledger(ledger)
-        st.toast("선택한 거래를 삭제했습니다.", icon="✅")
+        st.toast("선택한 보유 종목을 삭제했습니다.", icon="✅")
         st.rerun()
 else:
-    st.caption("거래 내역이 입력되면 여기에서 수정/삭제할 수 있습니다.")
+    st.caption("보유 종목을 여기에서 수정/삭제할 수 있습니다.")
 
 last_sync = ledger.get("_last_sync")
 if last_sync:
