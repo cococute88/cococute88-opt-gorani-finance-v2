@@ -169,6 +169,23 @@ def fmt_pct(value) -> str:
     return f"{to_float(value, 0.0):.1f}%"
 
 
+def fmt_personal_dividend_yield(avg_cost, dividend_series) -> str:
+    cleaned_avg_cost = str(avg_cost).replace("$", "").replace("₩", "").replace("원", "")
+    avg_cost_value = to_float(cleaned_avg_cost, 0.0)
+    if avg_cost_value <= 0 or dividend_series is None:
+        return "-"
+
+    dividends = pd.to_numeric(pd.Series(dividend_series), errors="coerce").dropna()
+    dividends = dividends[dividends > 0].tail(4)
+    if len(dividends) < 4:
+        return "-"
+
+    annual_dividend = to_float(dividends.sum(), 0.0)
+    if annual_dividend <= 0:
+        return "-"
+    return f"{annual_dividend / avg_cost_value * 100.0:.1f}%"
+
+
 def fmt_usd_whole(value) -> str:
     return f"${int(round(to_float(value, 0.0))):,}"
 
@@ -386,15 +403,17 @@ if priced_holdings.empty:
     st.info("아직 거래 내역이 없습니다.")
 else:
     display_holdings = priced_holdings.copy()
-    display_holdings["자산"] = display_holdings["asset_class"].map(ASSET_CLASS_LABELS)
     display_holdings["수량"] = display_holdings["quantity"].apply(fmt_quantity)
     display_holdings["평균단가"] = [fmt_money(v, c) for v, c in zip(display_holdings["avg_cost"], display_holdings["currency"])]
     display_holdings["현재가"] = [fmt_money(v, c) for v, c in zip(display_holdings["current_price"], display_holdings["currency"])]
+    display_holdings["내 배당률"] = [
+        fmt_personal_dividend_yield(avg_cost, dividend_histories.get(fetch_ticker))
+        for avg_cost, fetch_ticker in zip(display_holdings["avg_cost"], display_holdings["fetch_ticker"])
+    ]
     display_holdings["비중"] = display_holdings["weight_pct"].apply(fmt_pct)
     display_holdings["평가금액(KRW)"] = display_holdings["current_value_krw"].apply(lambda x: fmt_won(x) if pd.notna(x) else "환율 필요")
-    display_holdings["평가금액(USD)"] = display_holdings["current_value_usd"].apply(lambda x: fmt_usd_whole(x) if pd.notna(x) else "현재 USD 환율 조회 불가")
     st.dataframe(
-        display_holdings[["자산", "ticker", "name", "수량", "평균단가", "현재가", "비중", "평가금액(KRW)", "평가금액(USD)"]],
+        display_holdings[["ticker", "name", "수량", "평균단가", "현재가", "내 배당률", "비중", "평가금액(KRW)"]],
         use_container_width=True,
         hide_index=True,
     )
