@@ -350,15 +350,15 @@ def _get_ttm_yield_card_style(ttm_yield: float) -> tuple[str, str, str]:
     if ttm_yield is None or pd.isna(ttm_yield) or not np.isfinite(ttm_yield):
         return "#F2F4F7", "#344054", "계산 대기"
     if ttm_yield < 3.4:
-        return "#FDECEC", "#DC2626", "주의"
+        return "#FDECEC", "#DC2626", "🟥주의"
     if ttm_yield < 3.5:
-        return "#FFF3E0", "#EA580C", "관찰"
+        return "#FFF3E0", "#EA580C", "🟡진입고려"
     if ttm_yield < 3.6:
-        return "#FEF9C3", "#CA8A04", "진입"
+        return "#FEF9C3", "#CA8A04", "🟢진입OK"
     if ttm_yield < 3.7:
-        return "#ECFCCB", "#65A30D", "관심"
+        return "#ECFCCB", "#65A30D", "💚매수GO"
     if ttm_yield < 3.8:
-        return "#DCFCE7", "#16A34A", "우수"
+        return "#DCFCE7", "#16A34A", "💚매수가자🎉"
     return "#D1FAE5", "#047857", "강함"
 
 
