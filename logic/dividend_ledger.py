@@ -107,6 +107,9 @@ def normalize_transaction(raw: dict[str, Any]) -> dict[str, Any] | None:
     else:
         side = "BUY"
 
+    # ``date`` is the 기준일 used as the 매수일/매도일 for performance charts,
+    # not a separate registration timestamp. Missing or malformed legacy values
+    # fall back to today to keep existing Firebase rows loadable.
     tx_date = raw.get("date") or date.today().isoformat()
     if isinstance(tx_date, (datetime, date)):
         tx_date = tx_date.isoformat()[:10]
