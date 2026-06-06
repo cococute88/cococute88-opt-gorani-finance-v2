@@ -644,7 +644,41 @@ else:
 st.markdown("### 💼 보유 종목 관리")
 if ledger["transactions"]:
     tx_df = pd.DataFrame(ledger["transactions"])
-    tx_df["delete"] = False
+    today_kst = pd.Timestamp(datetime.now(KST).date())
+    editor_defaults = {
+        "delete": False,
+        "date": today_kst,
+        "asset_class": "US",
+        "ticker": "",
+        "quantity": 0.0,
+        "price": 0.0,
+        "weight": "0.0%",
+        "id": "",
+        "side": "BUY",
+    }
+    editor_columns = ["delete", "date", "asset_class", "ticker", "quantity", "price", "weight", "id", "side"]
+    for column, default_value in editor_defaults.items():
+        if column not in tx_df.columns:
+            tx_df[column] = default_value
+
+    # Streamlit DateColumn performs strict type checks before rendering.
+    # Firebase rows keep dates as ISO strings, so coerce them to pandas
+    # datetimes and fill invalid/missing values before entering data_editor.
+    tx_df["date"] = pd.to_datetime(tx_df["date"], errors="coerce")
+    tx_df["date"] = tx_df["date"].fillna(today_kst)
+
+    tx_df["delete"] = tx_df["delete"].fillna(False).astype(bool)
+    tx_df["asset_class"] = tx_df["asset_class"].fillna("US").astype(str).str.upper()
+    tx_df["ticker"] = tx_df["ticker"].fillna("").astype(str)
+    tx_df["quantity"] = pd.to_numeric(tx_df["quantity"], errors="coerce").fillna(0.0)
+    tx_df["price"] = pd.to_numeric(tx_df["price"], errors="coerce").fillna(0.0)
+    tx_df["id"] = tx_df["id"].fillna("").astype(str)
+    tx_df["side"] = tx_df["side"].fillna("BUY").astype(str).str.upper()
+
+    missing_id_mask = tx_df["id"].str.strip() == ""
+    if missing_id_mask.any():
+        tx_df.loc[missing_id_mask, "id"] = [uuid4().hex for _ in range(int(missing_id_mask.sum()))]
+
     weight_by_ticker = {}
     if priced_holdings is not None and not priced_holdings.empty:
         weight_by_ticker = {
@@ -652,7 +686,6 @@ if ledger["transactions"]:
             for row in priced_holdings.to_dict("records")
         }
     tx_df["weight"] = tx_df.apply(lambda row: weight_by_ticker.get((row.get("asset_class"), row.get("ticker")), "0.0%"), axis=1)
-    editor_columns = ["delete", "date", "asset_class", "ticker", "quantity", "price", "weight", "id", "side"]
     edited = st.data_editor(
         tx_df[editor_columns],
         hide_index=True,
@@ -675,6 +708,11 @@ if ledger["transactions"]:
     if c_save.button("💾 보유 종목 수정 저장", use_container_width=True):
         rows = []
         for row in edited.drop(columns=["delete", "weight"], errors="ignore").to_dict("records"):
+            row_date = pd.to_datetime(row.get("date"), errors="coerce")
+            if pd.isna(row_date):
+                row["date"] = datetime.now(KST).date().isoformat()
+            else:
+                row["date"] = row_date.date().isoformat()
             original = original_by_id.get(str(row.get("id")), {})
             rows.append({**original, **row})
         ledger["transactions"] = normalize_transactions(rows)
