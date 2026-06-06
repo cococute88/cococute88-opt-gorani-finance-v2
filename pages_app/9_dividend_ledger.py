@@ -238,10 +238,18 @@ def fmt_signed_won(value) -> str:
     return f"{sign}{int(round(value)):,}원"
 
 
-def performance_card(label: str, value: str, sub: str = "", accent: str = "#2DD4BF") -> None:
+def performance_card(
+    label: str,
+    value: str,
+    sub: str = "",
+    accent: str = "#2DD4BF",
+    border: str | None = None,
+    text_color: str = "#0F172A",
+) -> None:
+    border = border or accent
     st.markdown(
         f"""
-        <div class="gorani-dividend-performance-kpi" style="border-top-color:{accent};">
+        <div class="gorani-dividend-performance-kpi" style="border-color:{border}; --gorani-kpi-accent:{accent}; --gorani-kpi-text:{text_color};">
             <div class="gorani-dividend-performance-kpi-label">{label}</div>
             <div class="gorani-dividend-performance-kpi-value">{value}</div>
             <div class="gorani-dividend-performance-kpi-sub">{sub}</div>
@@ -258,13 +266,13 @@ def apply_performance_css() -> None:
         .gorani-dividend-performance-card {
             margin-top: 0.8rem;
             padding: 1.15rem;
-            border: 1px solid rgba(148, 163, 184, 0.25);
-            border-radius: 22px;
-            background: linear-gradient(135deg, rgba(15, 23, 42, 0.72), rgba(30, 41, 59, 0.45));
-            box-shadow: 0 16px 38px rgba(2, 6, 23, 0.18);
+            border: 1px solid #E7DDCB;
+            border-radius: 16px;
+            background: #FAF7EF;
+            box-shadow: 0 8px 22px rgba(15, 23, 42, 0.06);
         }
         .gorani-dividend-performance-title {
-            color: #E5E7EB;
+            color: #0F172A;
             font-size: 1.08rem;
             font-weight: 800;
             margin: 0 0 0.8rem 0;
@@ -272,27 +280,29 @@ def apply_performance_css() -> None:
         .gorani-dividend-performance-kpi {
             min-height: 104px;
             padding: 0.95rem 1rem;
-            border: 1px solid rgba(148, 163, 184, 0.22);
-            border-top: 3px solid #2DD4BF;
-            border-radius: 18px;
-            background: rgba(15, 23, 42, 0.55);
+            border: 1px solid #E2E8F0;
+            border-left: 4px solid var(--gorani-kpi-accent, #2DD4BF);
+            border-radius: 16px;
+            background: #FFFDF8;
+            box-shadow: 0 4px 14px rgba(15, 23, 42, 0.05);
         }
         .gorani-dividend-performance-kpi-label {
-            color: #94A3B8;
+            color: #64748B;
             font-size: 0.84rem;
             font-weight: 700;
             margin-bottom: 0.45rem;
         }
         .gorani-dividend-performance-kpi-value {
-            color: #F8FAFC;
+            color: var(--gorani-kpi-text, #0F172A);
             font-size: clamp(1.15rem, 2.3vw, 1.65rem);
             font-weight: 900;
             letter-spacing: -0.04em;
             white-space: nowrap;
         }
         .gorani-dividend-performance-kpi-sub {
-            color: #CBD5E1;
+            color: #64748B;
             font-size: 0.78rem;
+            font-weight: 700;
             margin-top: 0.35rem;
         }
         .gorani-dividend-performance-annual-profit {
@@ -301,15 +311,16 @@ def apply_performance_css() -> None:
             justify-content: center;
             min-height: 74px;
             padding: 0.85rem 1rem;
-            border: 1px solid rgba(148, 163, 184, 0.25);
-            border-radius: 18px;
-            background: rgba(15, 23, 42, 0.55);
+            border: 1px solid #E2E8F0;
+            border-radius: 16px;
+            background: #FFFDF8;
+            box-shadow: 0 4px 14px rgba(15, 23, 42, 0.05);
             font-size: 1.15rem;
             font-weight: 900;
             white-space: nowrap;
         }
         @media (max-width: 640px) {
-            .gorani-dividend-performance-card { padding: 0.85rem; border-radius: 18px; }
+            .gorani-dividend-performance-card { padding: 0.85rem; border-radius: 14px; }
             .gorani-dividend-performance-kpi { min-height: 92px; padding: 0.8rem; }
             .gorani-dividend-performance-kpi-value { white-space: normal; }
         }
@@ -333,38 +344,113 @@ def render_performance_section(transactions: list[dict], priced_holdings: pd.Dat
         return
 
     monthly_df = performance.monthly.copy()
+    if "display_month" not in monthly_df.columns:
+        monthly_df["display_month"] = monthly_df.apply(
+            lambda row: f"{int(row['year']) % 100}/{int(row['month_num'])}", axis=1
+        )
+    monthly_labels = monthly_df["display_month"].tolist()
     kpis = performance.kpis
 
     st.markdown('<div class="gorani-dividend-performance-card">', unsafe_allow_html=True)
     st.markdown('<div class="gorani-dividend-performance-title">투자 성과</div>', unsafe_allow_html=True)
     k1, k2, k3, k4 = st.columns(4)
     with k1:
-        performance_card("누적 입금", fmt_won(kpis.get("cumulative_deposit_krw")), "거래내역 순투자원금", "#9CA3AF")
+        performance_card(
+            "누적 입금",
+            fmt_won(kpis.get("cumulative_deposit_krw")),
+            "거래내역 순투자원금",
+            "#CBD5E1",
+            "#CBD5E1",
+            "#475569",
+        )
     with k2:
-        performance_card("내 포트폴리오", fmt_won(kpis.get("portfolio_value_krw")), fmt_return(kpis.get("portfolio_return_pct")), "#2DD4BF")
+        performance_card(
+            "내 포트폴리오",
+            fmt_won(kpis.get("portfolio_value_krw")),
+            fmt_return(kpis.get("portfolio_return_pct")),
+            "#14B8A6",
+            "#14B8A6",
+            "#0F766E",
+        )
     with k3:
-        performance_card("KOSPI 투자 시", fmt_won(kpis.get("kospi_value_krw")), fmt_return(kpis.get("kospi_return_pct")), "#3B82F6")
+        performance_card(
+            "KOSPI 투자 시",
+            fmt_won(kpis.get("kospi_value_krw")),
+            fmt_return(kpis.get("kospi_return_pct")),
+            "#3B82F6",
+            "#3B82F6",
+            "#2563EB",
+        )
     with k4:
-        performance_card("S&P 500 투자 시", fmt_won(kpis.get("sp500_value_krw")), fmt_return(kpis.get("sp500_return_pct")), "#F97316")
+        performance_card(
+            "S&P 500 투자 시",
+            fmt_won(kpis.get("sp500_value_krw")),
+            fmt_return(kpis.get("sp500_return_pct")),
+            "#F97316",
+            "#F97316",
+            "#EA580C",
+        )
 
     perf_fig = go.Figure()
-    perf_fig.add_trace(go.Scatter(x=monthly_df["month"], y=monthly_df["kospi_value_krw"], name="KOSPI", mode="lines", line=dict(color="#3B82F6", width=2, dash="dot")))
-    perf_fig.add_trace(go.Scatter(x=monthly_df["month"], y=monthly_df["sp500_value_krw"], name="S&P 500", mode="lines", line=dict(color="#F97316", width=2, dash="dot")))
-    perf_fig.add_trace(go.Scatter(x=monthly_df["month"], y=monthly_df["cumulative_deposit_krw"], name="누적 입금", mode="lines", line=dict(color="#9CA3AF", width=2, dash="dot")))
-    perf_fig.add_trace(go.Scatter(x=monthly_df["month"], y=monthly_df["portfolio_value_krw"], name="포트폴리오", mode="lines", line=dict(color="#2DD4BF", width=3)))
+    perf_fig.add_trace(go.Scatter(
+        x=monthly_df["display_month"],
+        y=monthly_df["kospi_value_krw"],
+        name="KOSPI",
+        mode="lines",
+        line=dict(color="#3B82F6", width=2, dash="dot"),
+        hovertemplate="%{x}<br>KOSPI: %{y:,.0f}원<extra></extra>",
+    ))
+    perf_fig.add_trace(go.Scatter(
+        x=monthly_df["display_month"],
+        y=monthly_df["sp500_value_krw"],
+        name="S&P 500",
+        mode="lines",
+        line=dict(color="#F97316", width=2, dash="dot"),
+        hovertemplate="%{x}<br>S&P 500: %{y:,.0f}원<extra></extra>",
+    ))
+    perf_fig.add_trace(go.Scatter(
+        x=monthly_df["display_month"],
+        y=monthly_df["cumulative_deposit_krw"],
+        name="누적 입금",
+        mode="lines",
+        line=dict(color="#CBD5E1", width=2, dash="dot"),
+        hovertemplate="%{x}<br>누적 입금: %{y:,.0f}원<extra></extra>",
+    ))
+    perf_fig.add_trace(go.Scatter(
+        x=monthly_df["display_month"],
+        y=monthly_df["portfolio_value_krw"],
+        name="포트폴리오",
+        mode="lines",
+        line=dict(color="#2DD4BF", width=3),
+        hovertemplate="%{x}<br>포트폴리오: %{y:,.0f}원<extra></extra>",
+    ))
     perf_fig.update_layout(
         height=410,
         margin=dict(l=8, r=8, t=18, b=58),
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#D1D5DB"),
+        font=dict(color="#334155"),
         hovermode="x unified",
         legend=dict(orientation="h", yanchor="top", y=-0.18, xanchor="center", x=0.5),
         xaxis_title="",
         yaxis_title="KRW",
     )
-    perf_fig.update_yaxes(gridcolor="rgba(148, 163, 184, 0.16)", tickformat=",.0f", tickprefix="₩")
-    perf_fig.update_xaxes(gridcolor="rgba(148, 163, 184, 0.08)")
+    perf_fig.update_yaxes(
+        gridcolor="#E2E8F0",
+        zerolinecolor="#CBD5E1",
+        tickfont=dict(color="#64748B"),
+        title_font=dict(color="#64748B"),
+        tickformat=",.0f",
+        tickprefix="₩",
+    )
+    perf_fig.update_xaxes(
+        type="category",
+        categoryorder="array",
+        categoryarray=monthly_labels,
+        gridcolor="#EEF2F7",
+        zerolinecolor="#CBD5E1",
+        tickfont=dict(color="#64748B"),
+    )
     st.plotly_chart(perf_fig, use_container_width=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -420,18 +506,26 @@ def render_performance_section(transactions: list[dict], priced_holdings: pd.Dat
         margin=dict(l=8, r=8, t=10, b=54),
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#D1D5DB"),
+        font=dict(color="#334155"),
         hovermode="x unified",
         legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="center", x=0.5),
         xaxis_title="",
-        yaxis=dict(title="월별 손익", gridcolor="rgba(148, 163, 184, 0.16)", tickformat=",.0f", tickprefix="₩"),
-        yaxis2=dict(title="총 자산", overlaying="y", side="right", showgrid=False, tickformat=",.0f", tickprefix="₩"),
+        yaxis=dict(title="월별 손익", gridcolor="#E2E8F0", zerolinecolor="#CBD5E1", tickfont=dict(color="#64748B"), title_font=dict(color="#64748B"), tickformat=",.0f", tickprefix="₩"),
+        yaxis2=dict(title="총 자산", overlaying="y", side="right", showgrid=False, zerolinecolor="#CBD5E1", tickfont=dict(color="#64748B"), title_font=dict(color="#64748B"), tickformat=",.0f", tickprefix="₩"),
         bargap=0.35,
     )
-    pnl_fig.update_xaxes(categoryorder="array", categoryarray=[f"{i}월" for i in range(1, 13)], gridcolor="rgba(148, 163, 184, 0.08)")
+    pnl_fig.update_xaxes(
+        type="category",
+        categoryorder="array",
+        categoryarray=[f"{i}월" for i in range(1, 13)],
+        gridcolor="#EEF2F7",
+        zerolinecolor="#CBD5E1",
+        tickfont=dict(color="#64748B"),
+    )
     st.plotly_chart(pnl_fig, use_container_width=True)
     st.caption("월별 손익 = 이번 달 말 평가액 - 지난 달 말 평가액 - 이번 달 순투자금(BUY +, SELL -)으로 계산합니다.")
     st.markdown('</div>', unsafe_allow_html=True)
+
 
 def build_target_summary(goal_achievement: dict, priced_holdings: pd.DataFrame) -> tuple[str, str]:
     if goal_achievement.get("ok"):

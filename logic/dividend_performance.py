@@ -262,6 +262,9 @@ def build_performance_result(
     monthly["month"] = monthly["month_end"].dt.strftime("%Y-%m")
     monthly["year"] = monthly["month_end"].dt.year
     monthly["month_num"] = monthly["month_end"].dt.month
+    monthly["display_month"] = monthly.apply(
+        lambda row: f"{int(row['year']) % 100}/{int(row['month_num'])}", axis=1
+    )
     monthly["net_investment_krw"] = monthly["month_end"].map(lambda m: to_float(cashflow_by_month.get(m, 0.0), 0.0))
     monthly["cumulative_deposit_krw"] = monthly["net_investment_krw"].cumsum()
     monthly["portfolio_value_krw"] = portfolio_values
