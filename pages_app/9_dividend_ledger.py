@@ -263,14 +263,6 @@ def apply_performance_css() -> None:
     st.markdown(
         """
         <style>
-        .gorani-dividend-performance-card {
-            margin-top: 0.8rem;
-            padding: 1.15rem;
-            border: 1px solid #E7DDCB;
-            border-radius: 16px;
-            background: #FAF7EF;
-            box-shadow: 0 8px 22px rgba(15, 23, 42, 0.06);
-        }
         .gorani-dividend-performance-title {
             color: #0F172A;
             font-size: 1.08rem;
@@ -320,7 +312,6 @@ def apply_performance_css() -> None:
             white-space: nowrap;
         }
         @media (max-width: 640px) {
-            .gorani-dividend-performance-card { padding: 0.85rem; border-radius: 14px; }
             .gorani-dividend-performance-kpi { min-height: 92px; padding: 0.8rem; }
             .gorani-dividend-performance-kpi-value { white-space: normal; }
         }
@@ -351,7 +342,6 @@ def render_performance_section(transactions: list[dict], priced_holdings: pd.Dat
     monthly_labels = monthly_df["display_month"].tolist()
     kpis = performance.kpis
 
-    st.markdown('<div class="gorani-dividend-performance-card">', unsafe_allow_html=True)
     st.markdown('<div class="gorani-dividend-performance-title">투자 성과</div>', unsafe_allow_html=True)
     k1, k2, k3, k4 = st.columns(4)
     with k1:
@@ -452,9 +442,7 @@ def render_performance_section(transactions: list[dict], priced_holdings: pd.Dat
         tickfont=dict(color="#64748B"),
     )
     st.plotly_chart(perf_fig, use_container_width=True)
-    st.markdown('</div>', unsafe_allow_html=True)
 
-    st.markdown('<div class="gorani-dividend-performance-card">', unsafe_allow_html=True)
     top_left, top_right, annual_col = st.columns([2.2, 0.9, 1.1])
     with top_left:
         st.markdown('<div class="gorani-dividend-performance-title">월별 수익/손실 추이</div>', unsafe_allow_html=True)
@@ -524,7 +512,6 @@ def render_performance_section(transactions: list[dict], priced_holdings: pd.Dat
     )
     st.plotly_chart(pnl_fig, use_container_width=True)
     st.caption("월별 손익 = 이번 달 말 평가액 - 지난 달 말 평가액 - 이번 달 순투자금(BUY +, SELL -)으로 계산합니다.")
-    st.markdown('</div>', unsafe_allow_html=True)
 
 
 def build_target_summary(goal_achievement: dict, priced_holdings: pd.DataFrame) -> tuple[str, str]:
