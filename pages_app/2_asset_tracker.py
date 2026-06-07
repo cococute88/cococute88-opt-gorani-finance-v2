@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime, timezone, timedelta
 from logic.tracker import parse_data, process_data
+from logic.tracker_performance import build_tracker_performance, default_start_date_for_latest
 from ui.styles import TOSS_CSS
 from core.sync import auto_save_tracker_data, auto_save_config 
 
@@ -73,6 +74,23 @@ def sort_tags_by_super_group(tag_entries):
 st.markdown(TOSS_CSS, unsafe_allow_html=True)
 
 def fmt_won(v): return f"{int(round(v)):,}원"
+
+def fmt_pct(v):
+    if v is None:
+        return "N/A"
+    return f"{v * 100:+.1f}%"
+
+def render_performance_card(title, value, subtitle, color="#191f28", border_color="#E5E8EB"):
+    st.markdown(
+        f"""
+        <div style="background:#fffefa; border:1px solid {border_color}; border-radius:16px; padding:20px; min-height:118px; box-shadow:0 4px 18px rgba(0,0,0,0.03);">
+            <div style="font-size:14px; color:#6b7684; font-weight:700; margin-bottom:18px;">{title}</div>
+            <div style="font-size:24px; color:{color}; font-weight:800; letter-spacing:-0.5px; word-break:keep-all;">{value}</div>
+            <div style="font-size:12px; color:#4e5968; font-weight:700; margin-top:12px;">{subtitle}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 def card_open():
     st.markdown("<hr style='border:0; border-top:1px solid #F2F4F6; opacity:0.2; margin:20px 0;'>", unsafe_allow_html=True)
@@ -271,3 +289,142 @@ if len(all_keys) > 0:
             st.plotly_chart(fig_trend, use_container_width=True)
 else:
     st.info("데이터를 추가하면 월별 자산 추이 그래프가 나타납니다.")
+
+# 하단 영역: 현재 포트폴리오 기준 가상 성과 분석
+st.markdown("---")
+st.markdown("## 📊 성과 분석")
+st.caption("가장 최근 등록된 포트폴리오를 과거 시작일에 한 번에 매수해 그대로 보유했다고 가정합니다.")
+
+all_perf_keys = sorted(st.session_state.asset_data.keys())
+if all_perf_keys:
+    latest_perf_key = all_perf_keys[-1]
+    default_perf_start = default_start_date_for_latest(latest_perf_key, today=now.date())
+    start_state_key = f"tracker_perf_start_{latest_perf_key}"
+    if start_state_key not in st.session_state:
+        st.session_state[start_state_key] = default_perf_start
+
+    ctrl_cols = st.columns([1, 3])
+    with ctrl_cols[0]:
+        perf_start_date = st.date_input(
+            "시작일",
+            key=start_state_key,
+            help="휴장일이면 이후 사용 가능한 첫 가격 데이터를 사용합니다.",
+        )
+    with ctrl_cols[1]:
+        st.write("")
+        st.caption(f"분석 기준 스냅샷: **{latest_perf_key}** · 기본값: 최근 스냅샷 기준 약 2년 전")
+
+    with st.spinner("성과 분석용 가격 데이터를 불러오는 중입니다..."):
+        perf = build_tracker_performance(st.session_state.asset_data, perf_start_date, today=now.date())
+
+    if perf.chart.empty or perf.initial_capital <= 0:
+        st.info("가격 데이터가 있는 자산이 부족해 성과 분석 그래프를 표시할 수 없습니다.")
+        for warning in perf.warnings:
+            st.caption(f"- {warning}")
+        if perf.excluded_assets:
+            st.caption("가격 데이터 없음/현금성 자산으로 성과 계산에서 제외된 항목: " + ", ".join(perf.excluded_assets))
+    else:
+        if perf.effective_start_date and perf.effective_start_date != perf.requested_start_date:
+            st.caption(f"선택한 시작일의 가격이 없어 **{perf.effective_start_date.isoformat()}**부터 계산했습니다.")
+
+        card_defs = [
+            ("순투자원금", "initial_capital", "시작일 기준 역산 매수금액", "#334155", "#CBD5E1"),
+            ("내 포트폴리오", "portfolio", fmt_pct(perf.cards.get("portfolio", {}).get("return")), "#0F766E", "#14B8A6"),
+            ("KOSPI 투자 시", "kospi", fmt_pct(perf.cards.get("kospi", {}).get("return")), "#2563EB", "#3B82F6"),
+            ("S&P 500 투자 시", "sp500", fmt_pct(perf.cards.get("sp500", {}).get("return")), "#EA580C", "#F97316"),
+            ("QQQ 투자 시", "qqq", fmt_pct(perf.cards.get("qqq", {}).get("return")), "#DB2777", "#EC4899"),
+        ]
+        card_cols = st.columns(5)
+        for col, (title, key, subtitle, color, border) in zip(card_cols, card_defs):
+            with col:
+                value = perf.cards.get(key, {}).get("value")
+                render_performance_card(title, fmt_won(value or 0), subtitle, color=color, border_color=border)
+
+        fig_perf = go.Figure()
+        trace_specs = [
+            ("portfolio", "포트폴리오", "#14B8A6", "solid", 3),
+            ("initial_capital", "순투자원금", "#CBD5E1", "dash", 2),
+            ("kospi", "KOSPI", "#3B82F6", "dot", 2),
+            ("sp500", "S&P 500", "#F97316", "dot", 2),
+            ("qqq", "QQQ", "#EC4899", "solid", 2),
+        ]
+        for key, label, color, dash, width in trace_specs:
+            if key not in perf.chart.columns or perf.chart[key].dropna().empty:
+                continue
+            returns = perf.chart[key] / perf.initial_capital - 1.0
+            fig_perf.add_trace(go.Scatter(
+                x=perf.chart.index,
+                y=perf.chart[key],
+                mode="lines",
+                name=label,
+                line=dict(color=color, dash=dash, width=width),
+                customdata=returns,
+                hovertemplate="%{x|%Y-%m-%d}<br>%{fullData.name}: %{y:,.0f}원<br>수익률: %{customdata:+.1%}<extra></extra>",
+            ))
+        fig_perf.update_layout(
+            height=460,
+            hovermode="x unified",
+            margin=dict(t=25, b=30, l=10, r=10),
+            legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="center", x=0.5),
+            yaxis=dict(title="KRW", tickformat=",.0f"),
+            xaxis=dict(dtick="M1", tickformat="%y.%m"),
+        )
+        st.plotly_chart(fig_perf, use_container_width=True)
+
+        if perf.excluded_assets:
+            st.caption("가격 데이터 없음/현금성 자산으로 성과 계산에서 제외된 항목: " + ", ".join(perf.excluded_assets))
+        if perf.warnings:
+            with st.expander("성과 분석 데이터 안내", expanded=False):
+                for warning in perf.warnings:
+                    st.write(f"- {warning}")
+        st.caption(
+            "이 그래프는 가장 최근 등록된 포트폴리오를 기준으로, 선택한 시작일에 동일한 보유수량을 매수해 현재까지 보유했다고 가정한 가상 성과입니다. "
+            "순투자원금은 실제 입금액이 아니라 현재 보유자산을 시작일 가격으로 역산한 금액입니다. USD 자산과 S&P 500/QQQ는 조회 가능한 USD/KRW 환율로 원화 환산합니다."
+        )
+
+        st.markdown("### 월별 수익/손실 추이")
+        monthly = perf.monthly.copy()
+        if monthly.empty:
+            st.info("월별 손익을 계산하기에 충분한 월말 가격 데이터가 없습니다.")
+        else:
+            rolling_profit = float(monthly["profit"].sum())
+            monthly_cols = st.columns([3, 1])
+            with monthly_cols[1]:
+                render_performance_card(
+                    "최근 12개월 손익",
+                    fmt_won(rolling_profit),
+                    "월말 가상 평가액 변화 합계",
+                    color="#EF4444" if rolling_profit >= 0 else "#3B82F6",
+                    border_color="#E5E8EB",
+                )
+            with monthly_cols[0]:
+                fig_monthly = go.Figure()
+                bar_colors = ["#EF4444" if v >= 0 else "#3B82F6" for v in monthly["profit"]]
+                fig_monthly.add_trace(go.Bar(
+                    x=monthly["label"],
+                    y=monthly["profit"],
+                    name="수익" if rolling_profit >= 0 else "손익",
+                    marker_color=bar_colors,
+                    hovertemplate="%{x}<br>월별 손익: %{y:,.0f}원<extra></extra>",
+                ))
+                fig_monthly.add_trace(go.Scatter(
+                    x=monthly["label"],
+                    y=monthly["portfolio"],
+                    mode="lines+markers",
+                    name="총 자산",
+                    yaxis="y2",
+                    line=dict(color="#14B8A6", width=3),
+                    hovertemplate="%{x}<br>가상 포트폴리오: %{y:,.0f}원<extra></extra>",
+                ))
+                fig_monthly.update_layout(
+                    height=380,
+                    hovermode="x unified",
+                    margin=dict(t=20, b=30, l=10, r=10),
+                    legend=dict(orientation="h", yanchor="top", y=-0.16, xanchor="center", x=0.5),
+                    yaxis=dict(title="월별 손익", tickformat=",.0f"),
+                    yaxis2=dict(title="총 자산", overlaying="y", side="right", tickformat=",.0f"),
+                )
+                st.plotly_chart(fig_monthly, use_container_width=True)
+            st.caption("월별 손익은 가상 포트폴리오의 월말 평가액 변화로 계산됩니다. 실제 추가 입금, 매수, 매도 내역은 반영하지 않습니다.")
+else:
+    st.info("데이터를 추가하면 성과 분석 섹션이 나타납니다.")
