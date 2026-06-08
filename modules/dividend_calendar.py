@@ -6,6 +6,7 @@ File: modules/dividend_calendar.py
 
 from __future__ import annotations
 
+import html
 import json
 import os
 import re
@@ -14,11 +15,10 @@ import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 import streamlit as st
-import streamlit.components.v1 as components
 import yfinance as yf
 from dateutil.relativedelta import relativedelta
 from pandas.tseries.holiday import USFederalHolidayCalendar
@@ -87,64 +87,226 @@ _US_HOLIDAYS = _US_CAL.holidays(start='2020-01-01', end='2035-12-31')
 
 
 # ---------------------------------------------------------------------------
-# External economic calendar widget
+# Trading Economics economic calendar
 # ---------------------------------------------------------------------------
-def render_us_economic_calendar_widget() -> None:
-    """Render Investing.com Economic Calendar widget for high-importance U.S. events."""
-    widget_src = (
-        "https://sslecal2.investing.com"
-        "?columns=exc_flags,exc_currency,exc_importance,exc_actual,exc_forecast,exc_previous"
-        "&importance=3"
-        "&features=datepicker,timezone,timeselector,filters"
-        "&countries=5"
-        "&calType=week"
-        "&timeZone=88"
-        "&lang=1"
-    )
+def get_trading_economics_key() -> str:
+    """Return Trading Economics API key from Streamlit secrets or env without breaking the app."""
+    # .streamlit/secrets.toml example:
+    # TRADING_ECONOMICS_API_KEY = "your_api_key_here"
+    return _get_api_key("TRADING_ECONOMICS_API_KEY")
 
+
+def _is_high_importance(event: Dict[str, Any]) -> bool:
+    raw = None
+    for key in ("Importance", "importance", "Impact", "impact"):
+        if key in event:
+            raw = event.get(key)
+            break
+
+    if raw is None:
+        return False
+    if isinstance(raw, (int, float)):
+        return raw >= 3
+
+    text = str(raw).strip().lower()
+    if not text:
+        return False
+    numeric_match = re.search(r"\d+", text)
+    if numeric_match and int(numeric_match.group()) >= 3:
+        return True
+    return text in {"high", "important", "highest"} or "★★★" in str(raw) or "***" in text
+
+
+def _format_calendar_value(value: Any) -> str:
+    if value is None:
+        return "-"
+    text = str(value).strip()
+    return text if text else "-"
+
+
+def _first_calendar_value(event: Dict[str, Any], keys: Tuple[str, ...]) -> Any:
+    for key in keys:
+        if key in event and event.get(key) not in (None, ""):
+            return event.get(key)
+    return None
+
+
+def _parse_event_datetime(raw_value: Any) -> Tuple[str, str, Optional[pd.Timestamp]]:
+    raw_text = "" if raw_value is None else str(raw_value).strip()
+    if not raw_text:
+        return "--/--", "--:--", None
+
+    try:
+        parsed = pd.to_datetime(raw_text, errors="raise")
+        if isinstance(parsed, pd.DatetimeIndex):
+            parsed = parsed[0]
+        ts = pd.Timestamp(parsed)
+        # Trading Economics 응답 시간대 확인 필요: tz 정보가 없으면 UTC로 간주해 KST로 변환합니다.
+        if ts.tzinfo is None:
+            ts = ts.tz_localize("UTC")
+        ts_kst = ts.tz_convert("Asia/Seoul")
+        return ts_kst.strftime("%m/%d"), ts_kst.strftime("%H:%M"), ts_kst
+    except Exception:
+        date_part = raw_text[:5] if len(raw_text) >= 5 else raw_text
+        time_match = re.search(r"(\d{1,2}:\d{2})", raw_text)
+        return date_part, time_match.group(1) if time_match else "--:--", None
+
+
+def translate_event_name(event_name: str) -> str:
+    """Translate major U.S. economic indicator names to concise Korean labels."""
+    if not event_name:
+        return ""
+
+    mappings = [
+        ("Philadelphia Fed Manufacturing Index", "필라델피아 연은 제조업활동지수"),
+        ("Michigan Consumer Sentiment", "미시간대 소비자심리지수"),
+        ("Fed Interest Rate Decision", "금리결정"),
+        ("Interest Rate Decision", "금리결정"),
+        ("Initial Jobless Claims", "신규 실업수당청구건수"),
+        ("Crude Oil Inventories", "원유재고"),
+        ("Core Retail Sales", "근원 소매판매"),
+        ("Retail Sales", "소매판매"),
+        ("Existing Home Sales", "기존주택판매"),
+        ("New Home Sales", "신규주택판매"),
+        ("Building Permits", "건축허가건수"),
+        ("Housing Starts", "주택착공건수"),
+        ("Non Farm Payrolls", "비농업고용지수"),
+        ("Nonfarm Payrolls", "비농업고용지수"),
+        ("Unemployment Rate", "실업률"),
+        ("GDP Growth Rate", "GDP 성장률"),
+        ("Core PCE Price Index", "근원 PCE 물가지수"),
+        ("PCE Price Index", "PCE 물가지수"),
+        ("Core CPI", "근원 소비자물가지수"),
+        ("CPI", "소비자물가지수"),
+        ("Core PPI", "근원 생산자물가지수"),
+        ("PPI", "생산자물가지수"),
+    ]
+
+    translated = event_name
+    for english, korean in mappings:
+        pattern = re.compile(re.escape(english), re.IGNORECASE)
+        if pattern.search(translated):
+            translated = pattern.sub(korean, translated, count=1)
+            break
+    return translated
+
+
+def normalize_economic_event(event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Normalize one Trading Economics calendar row for mobile card rendering."""
+    if not isinstance(event, dict):
+        return None
+
+    country = str(event.get("Country") or event.get("country") or "").strip()
+    if country and country.lower() not in {"united states", "usa", "us"}:
+        return None
+    if not _is_high_importance(event):
+        return None
+
+    raw_name = str(event.get("Event") or event.get("event") or event.get("Category") or event.get("category") or "").strip()
+    if not raw_name:
+        return None
+
+    date_text, time_text, sort_ts = _parse_event_datetime(event.get("Date") or event.get("date"))
+    category = str(event.get("Category") or event.get("category") or "").strip()
+    is_holiday = "holiday" in f"{raw_name} {category}".lower() or "휴일" in f"{raw_name} {category}"
+
+    return {
+        "date": date_text,
+        "time": time_text,
+        "sort_ts": sort_ts,
+        "name": translate_event_name(raw_name),
+        "actual": _format_calendar_value(_first_calendar_value(event, ("Actual", "actual"))),
+        "forecast": _format_calendar_value(_first_calendar_value(event, ("Forecast", "forecast", "TEForecast", "teForecast"))),
+        "previous": _format_calendar_value(_first_calendar_value(event, ("Previous", "previous"))),
+        "is_holiday": is_holiday,
+    }
+
+
+@st.cache_data(ttl=60 * 60 * 3, show_spinner=False)
+def fetch_us_high_importance_economic_calendar(api_key: str, start_date: str, end_date: str) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+    """Fetch high-importance United States calendar events from Trading Economics."""
+    if not api_key:
+        return [], "missing_key"
+
+    url = f"https://api.tradingeconomics.com/calendar/country/united%20states/{start_date}/{end_date}"
+    try:
+        response = requests.get(url, params={"c": api_key, "f": "json"}, timeout=10)
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, list):
+            return [], "invalid_payload"
+
+        events = []
+        for item in payload:
+            normalized = normalize_economic_event(item)
+            if normalized:
+                events.append(normalized)
+
+        events.sort(key=lambda row: row.get("sort_ts") or pd.Timestamp.max.tz_localize("UTC"))
+        return events[:20], None
+    except Exception:
+        return [], "fetch_failed"
+
+
+def render_us_economic_calendar_section() -> None:
+    """Render a custom mobile-first U.S. economic calendar section."""
     st.divider()
     st.markdown("### 📅 미국 중요 경제 일정")
     st.caption("이번 주/다음 주의 중요도 높은 미국 경제지표를 확인합니다.")
-    st.caption("외부 위젯이 표시되지 않으면 [Investing.com 경제캘린더](https://www.investing.com/economic-calendar/)를 직접 확인하세요.")
 
-    components.html(
-        f"""
-        <div style="
-            width: 100%;
-            max-width: 100%;
-            overflow: hidden;
-            border: 1px solid rgba(148, 163, 184, 0.24);
-            border-radius: 14px;
-            background: #0f172a;
-            box-shadow: 0 12px 28px rgba(0, 0, 0, 0.24);
-        ">
-            <iframe
-                src="{widget_src}"
-                width="100%"
-                height="580"
-                frameborder="0"
-                allowtransparency="true"
-                marginwidth="0"
-                marginheight="0"
-                style="display:block; width:100%; max-width:100%; border:0; background:#0f172a;"
-                title="Investing.com Economic Calendar">
-            </iframe>
-        </div>
-        <div style="
-            margin-top: 6px;
-            font-family: Arial, Helvetica, sans-serif;
-            font-size: 11px;
-            color: rgba(226, 232, 240, 0.65);
-            text-align: right;
-        ">
-            Real Time Economic Calendar provided by
-            <a href="https://www.investing.com/" rel="nofollow noopener" target="_blank"
-               style="color:#60a5fa; font-weight:700; text-decoration:none;">Investing.com</a>.
-        </div>
+    api_key = get_trading_economics_key()
+    if not api_key:
+        st.info("Trading Economics API 키가 설정되지 않아 경제 일정을 표시할 수 없습니다.")
+        return
+
+    today_kst = pd.Timestamp.now(tz="Asia/Seoul").date()
+    start_date = today_kst.strftime("%Y-%m-%d")
+    end_date = (today_kst + timedelta(days=14)).strftime("%Y-%m-%d")
+    events, error = fetch_us_high_importance_economic_calendar(api_key, start_date, end_date)
+
+    if error == "fetch_failed" or error == "invalid_payload":
+        st.warning("경제 일정을 불러오지 못했습니다.")
+        return
+    if not events:
+        st.info("향후 2주 내 표시할 중요 일정이 없습니다.")
+        return
+
+    st.markdown(
+        """
+        <style>
+        .econ-card-list { display:flex; flex-direction:column; gap:8px; margin-top:10px; }
+        .econ-card { padding:10px 12px; border:1px solid rgba(148,163,184,.22); border-radius:12px; background:rgba(15,23,42,.04); }
+        .econ-card-header { display:flex; gap:9px; align-items:flex-start; font-size:15px; line-height:1.35; font-weight:700; }
+        .econ-card-time { flex:0 0 auto; color:#2563eb; white-space:nowrap; font-variant-numeric:tabular-nums; }
+        .econ-card-name { min-width:0; overflow-wrap:anywhere; }
+        .econ-card-values { margin-top:4px; padding-left:70px; color:rgba(100,116,139,.95); font-size:12px; line-height:1.35; }
+        .econ-holiday { border-color:rgba(245,158,11,.45); background:rgba(245,158,11,.08); }
+        .econ-holiday-badge { margin-left:6px; padding:1px 6px; border-radius:999px; color:#b45309; background:rgba(245,158,11,.16); font-size:11px; font-weight:700; }
+        @media (max-width: 480px) { .econ-card-header { font-size:14px; gap:7px; } .econ-card-values { padding-left:0; } }
+        </style>
         """,
-        height=620,
-        scrolling=False,
+        unsafe_allow_html=True,
     )
+
+    cards = ['<div class="econ-card-list">']
+    for event in events:
+        name = html.escape(event["name"])
+        values = f"실제 {html.escape(event['actual'])} | 예상 {html.escape(event['forecast'])} | 이전 {html.escape(event['previous'])}"
+        holiday_class = " econ-holiday" if event.get("is_holiday") else ""
+        badge = '<span class="econ-holiday-badge">휴일</span>' if event.get("is_holiday") else ""
+        cards.append(
+            f"""
+            <div class="econ-card{holiday_class}">
+                <div class="econ-card-header">
+                    <span class="econ-card-time">{html.escape(event['date'])} {html.escape(event['time'])}</span>
+                    <span class="econ-card-name">{name}{badge}</span>
+                </div>
+                <div class="econ-card-values">{values}</div>
+            </div>
+            """
+        )
+    cards.append("</div>")
+    st.markdown("\n".join(cards), unsafe_allow_html=True)
 
 # ---------------------------------------------------------------------------
 # Trading Day & Pattern Logic
@@ -1257,7 +1419,7 @@ def render() -> None:
         st.caption(f"{len(master_df):,} event(s) shown")
         st.dataframe(master_df, use_container_width=True, hide_index=True)
 
-    render_us_economic_calendar_widget()
+    render_us_economic_calendar_section()
 
 if __name__ == "__main__":
     st.set_page_config(page_title="GORANI FINANCE · Dividend Calendar", page_icon="📅", layout="wide", initial_sidebar_state="expanded")
