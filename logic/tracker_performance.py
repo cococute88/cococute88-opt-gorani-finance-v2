@@ -81,9 +81,23 @@ def _normalize_history_frame(df: pd.DataFrame) -> pd.DataFrame:
         raise ValueError("조회 결과가 비어 있습니다.")
     normalized = df.copy()
     if isinstance(normalized.columns, pd.MultiIndex):
-        normalized.columns = normalized.columns.get_level_values(0)
-    if "Close" not in normalized.columns:
-        raise ValueError("Close 컬럼이 없습니다.")
+        close_cols = [
+            col for col in normalized.columns
+            if any(str(part).lower() == "close" for part in col)
+        ]
+        if not close_cols:
+            raise ValueError("Close 컬럼이 없습니다.")
+        close = normalized.loc[:, close_cols]
+        if isinstance(close, pd.DataFrame):
+            close = close.iloc[:, 0]
+        normalized = pd.DataFrame({"Close": close})
+    else:
+        if "Close" not in normalized.columns:
+            raise ValueError("Close 컬럼이 없습니다.")
+        close = normalized["Close"]
+        if isinstance(close, pd.DataFrame):
+            close = close.iloc[:, 0]
+        normalized = pd.DataFrame({"Close": close})
     normalized.index = pd.to_datetime(normalized.index, errors="coerce")
     normalized = normalized[~normalized.index.isna()]
     if normalized.index.tz is not None:
@@ -233,16 +247,35 @@ def _month_end_frequency() -> str:
         return "M"
 
 
-def _monthly_profit_frame(portfolio: pd.Series) -> pd.DataFrame:
+def _monthly_profit_frame(portfolio: pd.Series, end_day: date | None = None) -> pd.DataFrame:
+    """Build the 12-month monthly P/L frame from the same KRW portfolio series used in the top chart."""
     if portfolio.empty:
         return pd.DataFrame()
-    monthly_value = portfolio.resample(_month_end_frequency()).last().dropna()
+
+    monthly_source = pd.to_numeric(portfolio.copy(), errors="coerce").dropna()
+    monthly_source.index = pd.to_datetime(monthly_source.index, errors="coerce")
+    monthly_source = monthly_source[~monthly_source.index.isna()]
+    monthly_source.index = monthly_source.index.tz_localize(None) if monthly_source.index.tz is not None else monthly_source.index
+    monthly_source.index = monthly_source.index.normalize()
+    monthly_source = monthly_source[~monthly_source.index.duplicated(keep="last")].sort_index()
+
+    if end_day is not None:
+        monthly_source = monthly_source.loc[monthly_source.index <= pd.Timestamp(end_day).normalize()]
+    if monthly_source.empty:
+        return pd.DataFrame()
+
+    monthly_value = monthly_source.resample(_month_end_frequency()).last().dropna().sort_index()
     if len(monthly_value) < 2:
         return pd.DataFrame()
+
     monthly = pd.DataFrame({"portfolio": monthly_value})
     monthly["profit"] = monthly["portfolio"].diff()
-    monthly = monthly.dropna().tail(12)
-    monthly["label"] = [f"{idx.year % 100}.{idx.month}" for idx in monthly.index]
+    monthly = monthly.dropna(subset=["profit"]).tail(12).copy()
+    monthly["month_end"] = monthly.index
+    monthly["display_label"] = monthly["month_end"].dt.strftime("%y.%m")
+    # Plotly may infer labels such as 25.10 as numeric 25.1.  Keep the visible
+    # label unchanged while forcing the current page traces to stay categorical.
+    monthly["label"] = "\u200b" + monthly["display_label"]
     return monthly
 
 
@@ -313,8 +346,10 @@ def build_tracker_performance(asset_data: dict[str, dict[str, Any]], start_day: 
 
     combined = pd.concat(portfolio_parts, axis=1).sort_index().ffill()
     combined = combined.loc[combined.index >= pd.Timestamp(result.effective_start_date)]
-    portfolio = combined.sum(axis=1).dropna()
-    result.current_portfolio_value = float(portfolio.iloc[-1]) if not portfolio.empty else latest_total
+    combined = combined.loc[combined.index <= pd.Timestamp(end_day).normalize()]
+    portfolio = combined.sum(axis=1, min_count=1).dropna().sort_index()
+    current_value, _ = _asof(portfolio, end_day, direction="backward")
+    result.current_portfolio_value = float(current_value) if current_value is not None else latest_total
 
     capital_line = pd.Series(result.initial_capital, index=portfolio.index, name="initial_capital")
     chart = pd.DataFrame({"portfolio": portfolio, "initial_capital": capital_line})
@@ -339,8 +374,8 @@ def build_tracker_performance(asset_data: dict[str, dict[str, Any]], start_day: 
         chart[key] = scaled.reindex(chart.index).ffill()
         current_values[key] = float(chart[key].dropna().iloc[-1]) if not chart[key].dropna().empty else float(current_value)
 
-    result.chart = chart.dropna(subset=["portfolio"])
-    result.monthly = _monthly_profit_frame(portfolio)
+    result.chart = chart.dropna(subset=["portfolio"]).sort_index()
+    result.monthly = _monthly_profit_frame(result.chart["portfolio"], end_day=result.end_date)
     result.cards = {
         "initial_capital": {"value": result.initial_capital, "return": 0.0},
         "portfolio": {"value": result.current_portfolio_value, "return": result.current_portfolio_value / result.initial_capital - 1.0},
