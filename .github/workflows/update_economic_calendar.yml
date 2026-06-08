@@ -35,6 +35,50 @@ jobs:
       - name: Fetch Investing.com economic calendar
         run: python scripts/fetch_investing_economic_calendar.py
 
+      - name: Show economic calendar result
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path("data/economic_calendar_us_high.json")
+          print(f"Economic calendar JSON path: {path}")
+          if not path.exists():
+              print("Economic calendar JSON does not exist.")
+              raise SystemExit(0)
+
+          try:
+              payload = json.loads(path.read_text(encoding="utf-8"))
+          except Exception as exc:
+              print(f"Economic calendar JSON is invalid: {exc}")
+              raise SystemExit(0)
+
+          payload_type = type(payload).__name__
+          status = payload.get("status") if isinstance(payload, dict) else "ok"
+          updated_at = payload.get("updated_at") if isinstance(payload, dict) else None
+          events = payload.get("events", []) if isinstance(payload, dict) else payload
+          events_count = len(events) if isinstance(events, list) else 0
+          error = payload.get("error") if isinstance(payload, dict) else None
+
+          lines = [
+              "## Economic calendar update result",
+              f"- payload type: `{payload_type}`",
+              f"- status: `{status}`",
+              f"- updated_at: `{updated_at}`",
+              f"- events count: `{events_count}`",
+          ]
+          if error:
+              print(f"::warning::Economic calendar fetch failed: {str(error)[:300]}")
+              lines.append(f"- error: `{str(error)[:300]}`")
+          print("\n".join(lines))
+          summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary_path:
+              with Path(summary_path).open("a", encoding="utf-8") as f:
+                  f.write("\n".join(lines) + "\n")
+          PY
+
       - name: Commit updated economic calendar
         uses: stefanzweifel/git-auto-commit-action@v5
         with:

@@ -142,24 +142,99 @@ def _is_economic_data_stale(updated_at: Any) -> bool:
     return age >= pd.Timedelta(hours=ECONOMIC_CALENDAR_STALE_HOURS)
 
 
+def _normalize_economic_calendar_payload(payload: Any) -> Dict[str, Any]:
+    """Normalize legacy list and new metadata-object calendar payloads."""
+    if isinstance(payload, list):
+        return {
+            "payload_type": "list",
+            "status": "ok",
+            "updated_at": None,
+            "source": "legacy-list",
+            "error": None,
+            "events_payload": payload,
+        }
+    if isinstance(payload, dict):
+        events_payload = payload.get("events", [])
+        return {
+            "payload_type": "dict",
+            "status": str(payload.get("status") or "ok"),
+            "updated_at": payload.get("updated_at"),
+            "source": payload.get("source"),
+            "error": payload.get("error"),
+            "events_payload": events_payload if isinstance(events_payload, list) else [],
+        }
+    return {
+        "payload_type": type(payload).__name__,
+        "status": "invalid_file",
+        "updated_at": None,
+        "source": None,
+        "error": "payload must be a list or dict",
+        "events_payload": [],
+    }
+
+
+def _build_economic_debug_info(
+    *,
+    payload_type: str,
+    status: str,
+    updated_at: Any,
+    event_count: int,
+    is_stale: bool,
+    error: Any = None,
+) -> Dict[str, Any]:
+    return {
+        "status": status,
+        "updated_at": updated_at,
+        "events_count": event_count,
+        "is_stale": is_stale,
+        "json_path": str(ECONOMIC_CALENDAR_JSON_PATH),
+        "error": error,
+        "payload_type": payload_type,
+    }
+
+
 @st.cache_data(ttl=60 * 30, show_spinner=False)
-def load_us_high_importance_economic_calendar() -> Tuple[Optional[List[Dict[str, Any]]], Optional[str], Optional[str], bool]:
-    """Load pre-generated U.S. high-importance economic calendar JSON without network calls."""
+def load_us_high_importance_economic_calendar() -> Tuple[List[Dict[str, Any]], Optional[str], Optional[str], bool, Dict[str, Any]]:
+    """Load pre-generated U.S. high-importance economic calendar JSON without network calls.
+
+    Supports both the legacy list payload and the new metadata object payload.
+    """
     if not ECONOMIC_CALENDAR_JSON_PATH.exists():
-        return None, "missing_file", None, False
+        debug_info = _build_economic_debug_info(
+            payload_type="missing",
+            status="not_initialized",
+            updated_at=None,
+            event_count=0,
+            is_stale=False,
+        )
+        return [], "not_initialized", None, False, debug_info
 
     try:
         with ECONOMIC_CALENDAR_JSON_PATH.open("r", encoding="utf-8") as f:
             payload = json.load(f)
-    except Exception:
-        return [], "invalid_file", None, False
+    except Exception as exc:
+        debug_info = _build_economic_debug_info(
+            payload_type="invalid",
+            status="invalid_file",
+            updated_at=None,
+            event_count=0,
+            is_stale=False,
+            error=str(exc),
+        )
+        return [], "invalid_file", None, False, debug_info
 
-    if not isinstance(payload, list):
-        return [], "invalid_file", None, False
+    normalized = _normalize_economic_calendar_payload(payload)
+    payload_type = normalized["payload_type"]
+    status = normalized["status"]
+    raw_updated_at = normalized["updated_at"]
+    events_payload = normalized["events_payload"]
+    event_count = len(events_payload)
+    is_stale = _is_economic_data_stale(raw_updated_at)
+    updated_at = _format_economic_updated_at(raw_updated_at)
 
     events: List[Dict[str, Any]] = []
-    latest_updated_at: Optional[str] = None
-    for item in payload:
+    latest_event_updated_at: Optional[str] = None
+    for item in events_payload:
         if not isinstance(item, dict):
             continue
         raw_date = "" if item.get("date") is None else str(item.get("date")).strip()
@@ -178,9 +253,33 @@ def load_us_high_importance_economic_calendar() -> Tuple[Optional[List[Dict[str,
         }
         events.append(event)
         if item.get("updated_at"):
-            latest_updated_at = str(item.get("updated_at"))
+            latest_event_updated_at = str(item.get("updated_at"))
 
-    return events, None, _format_economic_updated_at(latest_updated_at), _is_economic_data_stale(latest_updated_at)
+    if not raw_updated_at and latest_event_updated_at:
+        updated_at = _format_economic_updated_at(latest_event_updated_at)
+        is_stale = _is_economic_data_stale(latest_event_updated_at)
+
+    debug_info = _build_economic_debug_info(
+        payload_type=payload_type,
+        status=status,
+        updated_at=raw_updated_at or latest_event_updated_at,
+        event_count=event_count,
+        is_stale=is_stale,
+        error=normalized.get("error"),
+    )
+    return events, None, updated_at, is_stale, debug_info
+
+
+def _render_economic_calendar_debug(debug_info: Dict[str, Any]) -> None:
+    with st.expander("경제 일정 데이터 상태"):
+        st.write(f"JSON status: {debug_info.get('status')}")
+        st.write(f"updated_at: {debug_info.get('updated_at') or '-'}")
+        st.write(f"events count: {debug_info.get('events_count', 0)}")
+        st.write(f"stale 여부: {debug_info.get('is_stale')}")
+        st.write(f"JSON 파일 경로: {debug_info.get('json_path')}")
+        if debug_info.get("error"):
+            st.write(f"error 요약: {str(debug_info.get('error'))[:300]}")
+        st.write(f"payload type: {debug_info.get('payload_type')}")
 
 
 def render_us_economic_calendar_section() -> None:
@@ -189,15 +288,29 @@ def render_us_economic_calendar_section() -> None:
     st.markdown("### 📅 주요 미국 경제 일정")
     st.caption("향후 30일 내 중요도 높은 미국 경제지표 일정입니다.")
 
-    events, error, updated_at, is_stale = load_us_high_importance_economic_calendar()
-    if error == "missing_file":
-        st.info("경제 일정 데이터 파일이 아직 생성되지 않았습니다. GitHub Actions 수동 실행 후 다시 확인하세요.")
-        return
+    events, error, updated_at, is_stale, debug_info = load_us_high_importance_economic_calendar()
+    status = debug_info.get("status") or "ok"
+
     if error == "invalid_file":
         st.warning("경제 일정 데이터 파일을 읽을 수 없습니다.")
+        _render_economic_calendar_debug(debug_info)
         return
-    if not events:
-        st.info("향후 30일 내 표시할 중요 일정이 없습니다.")
+
+    if status == "not_initialized":
+        st.info("경제 일정 데이터가 아직 생성되지 않았습니다. GitHub Actions에서 Update Economic Calendar를 수동 실행해 주세요.")
+        _render_economic_calendar_debug(debug_info)
+        return
+    if status == "fetch_failed":
+        st.warning("경제 일정 자동 수집에 실패했습니다. GitHub Actions 로그를 확인해 주세요.")
+        _render_economic_calendar_debug(debug_info)
+        return
+    if status == "empty":
+        st.info("수집은 성공했지만 향후 30일 내 표시할 중요 일정이 없습니다.")
+        _render_economic_calendar_debug(debug_info)
+        return
+    if status == "ok" and not events:
+        st.info("경제 일정 데이터가 비어 있습니다.")
+        _render_economic_calendar_debug(debug_info)
         return
 
     st.markdown(
@@ -235,6 +348,7 @@ def render_us_economic_calendar_section() -> None:
     if is_stale:
         cards.append('<div class="econ-stale-warning">⚠️ 경제 일정 데이터가 48시간 이상 업데이트되지 않았습니다.</div>')
     st.markdown("\n".join(cards), unsafe_allow_html=True)
+    _render_economic_calendar_debug(debug_info)
 
 # ---------------------------------------------------------------------------
 # Trading Day & Pattern Logic

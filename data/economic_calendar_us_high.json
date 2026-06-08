@@ -1,13 +1,6 @@
-[][
-  {
-    "date": "2026-06-10",
-    "time": "21:30",
-    "name": "소비자물가지수 (YoY)",
-    "raw_name": "CPI (YoY)",
-    "currency": "USD",
-    "country": "United States",
-    "importance": 3,
-    "source": "manual-test",
-    "updated_at": "2026-06-08T16:00:00+09:00"
-  }
-]
+{
+  "status": "not_initialized",
+  "updated_at": null,
+  "source": "investing",
+  "events": []
+}

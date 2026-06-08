@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """Fetch U.S. high-importance economic calendar events from Investing.com.
 
-The script is intended for GitHub Actions. It writes
-``data/economic_calendar_us_high.json`` only when a valid non-empty payload is
-collected. If Investing.com blocks or returns an invalid response, the existing
-JSON file is preserved. If no JSON file exists yet, an empty array is created so
-Streamlit can render a deterministic empty state.
+The script is intended for GitHub Actions. It writes a metadata envelope to
+``data/economic_calendar_us_high.json`` so the Streamlit app can distinguish a
+successful empty calendar from request/parsing failures. Hard fetch/parsing
+failures exit non-zero after preserving any existing valid successful payload.
 """
 
 from __future__ import annotations
@@ -237,9 +236,50 @@ def extract_event(row: Tag, current_date: date | None, start: date, end: date, u
     }
 
 
+def response_preview(text: str, limit: int = 200) -> str:
+    """Return a compact response-body preview without headers/cookies."""
+    return clean_text(text)[:limit]
+
+
+def is_cloudflare_challenge(text: str) -> bool:
+    lowered = text.lower()
+    challenge_markers = (
+        "cloudflare",
+        "cf-browser-verification",
+        "cf-chl",
+        "checking your browser",
+        "just a moment",
+    )
+    return any(marker in lowered for marker in challenge_markers)
+
+
+def log_response_debug(chunk_start: date, chunk_end: date, response: requests.Response) -> None:
+    logging.info(
+        "Chunk %s to %s response: status=%s length=%s content_type=%s preview=%r",
+        chunk_start,
+        chunk_end,
+        response.status_code,
+        len(response.text or ""),
+        response.headers.get("Content-Type", ""),
+        response_preview(response.text or ""),
+    )
+
+
 def fetch_calendar_html(session: requests.Session, start: date, end: date) -> str:
-    landing_response = session.get(INVESTING_CALENDAR_URL, timeout=TIMEOUT_SECONDS)
-    landing_response.raise_for_status()
+    try:
+        landing_response = session.get(INVESTING_CALENDAR_URL, timeout=TIMEOUT_SECONDS)
+        logging.info(
+            "Landing page response for chunk %s to %s: status=%s length=%s content_type=%s preview=%r",
+            start,
+            end,
+            landing_response.status_code,
+            len(landing_response.text or ""),
+            landing_response.headers.get("Content-Type", ""),
+            response_preview(landing_response.text or ""),
+        )
+        landing_response.raise_for_status()
+    except requests.RequestException as exc:
+        raise RuntimeError(f"Investing.com landing request failed: {exc}") from exc
 
     payload = {
         "country[]": ["5"],  # Investing.com country id for United States.
@@ -251,37 +291,82 @@ def fetch_calendar_html(session: requests.Session, start: date, end: date) -> st
         "currentTab": "custom",
         "limit_from": "0",
     }
-    response = session.post(INVESTING_ENDPOINT, data=payload, timeout=TIMEOUT_SECONDS)
-    response.raise_for_status()
+    try:
+        response = session.post(INVESTING_ENDPOINT, data=payload, timeout=TIMEOUT_SECONDS)
+    except requests.RequestException as exc:
+        raise RuntimeError(f"Investing.com calendar request failed for {start} to {end}: {exc}") from exc
 
+    log_response_debug(start, end, response)
     text = response.text.strip()
-    if "cloudflare" in text.lower() or "cf-browser-verification" in text.lower():
+
+    if response.status_code in {403, 429} or response.status_code >= 500:
+        raise RuntimeError(f"Investing.com returned HTTP {response.status_code} for {start} to {end}")
+    try:
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        raise RuntimeError(f"Investing.com returned HTTP {response.status_code} for {start} to {end}: {exc}") from exc
+
+    if is_cloudflare_challenge(text):
         raise RuntimeError("Investing.com returned a Cloudflare challenge")
 
-    try:
-        decoded = response.json()
-    except ValueError:
-        return text
+    content_type = response.headers.get("Content-Type", "").lower()
+    if "json" in content_type:
+        try:
+            decoded = response.json()
+        except ValueError as exc:
+            raise RuntimeError("Investing.com JSON response parsing failed") from exc
 
-    html = decoded.get("data") if isinstance(decoded, dict) else None
-    if not isinstance(html, str) or not html.strip():
-        raise RuntimeError("Investing.com response does not contain calendar HTML")
-    return html
+        html = decoded.get("data") if isinstance(decoded, dict) else None
+        if not isinstance(html, str) or not html.strip():
+            raise RuntimeError("Investing.com response JSON does not contain calendar HTML")
+        if is_cloudflare_challenge(html):
+            raise RuntimeError("Investing.com returned a Cloudflare challenge inside calendar HTML")
+        return html
+
+    if not text:
+        raise RuntimeError("Investing.com returned an empty response body")
+    return text
+
+
+def row_currency(row: Tag) -> str:
+    return cell_text(row, ("td.flagCur", ".flagCur", "td.left.flagCur")) or clean_text(row.get("data-event-currency"))
+
+
+def row_country_is_us(row: Tag) -> bool:
+    country_attr = clean_text(row.get("data-event-country"))
+    return not country_attr or country_attr.lower() in {"united states", "usa", "us"}
 
 
 def parse_events(html: str, start: date, end: date, updated_at: str) -> list[dict[str, Any]]:
     soup = BeautifulSoup(html, "html.parser")
     events: list[dict[str, Any]] = []
     current_date: date | None = None
+    html_row_count = 0
+    raw_candidate_count = 0
+    importance_pass_count = 0
+    usd_pass_count = 0
 
-    for row in soup.select("tr"):
+    try:
+        rows = soup.select("tr")
+    except Exception as exc:
+        raise RuntimeError("HTML parsing failed while selecting calendar rows") from exc
+
+    html_row_count = len(rows)
+    for row in rows:
         row_classes = row.get("class") or []
         row_text = clean_text(row.get_text(" "))
         if "theDay" in row_classes or row.select_one("td.theDay"):
             current_date = parse_date_header(row_text, start.year) or current_date
             continue
-        if not ("js-event-item" in row_classes or row.get("data-event-datetime") or row.get("id", "").startswith("eventRowId_")):
+        is_candidate = "js-event-item" in row_classes or row.get("data-event-datetime") or row.get("id", "").startswith("eventRowId_")
+        if not is_candidate:
             continue
+        raw_candidate_count += 1
+        if importance_from_row(row) >= 3:
+            importance_pass_count += 1
+        currency = row_currency(row)
+        if (not currency or currency.upper() == "USD") and row_country_is_us(row):
+            usd_pass_count += 1
         event = extract_event(row, current_date, start, end, updated_at)
         if event:
             events.append(event)
@@ -296,6 +381,30 @@ def parse_events(html: str, start: date, end: date, updated_at: str) -> list[dic
         seen.add(dedupe_key)
         event.pop("_sort", None)
         cleaned.append(event)
+
+    logging.info(
+        "Parsing stats for %s to %s: html_rows=%d raw_event_candidates=%d importance_3_pass=%d usd_filter_pass=%d final_events=%d",
+        start,
+        end,
+        html_row_count,
+        raw_candidate_count,
+        importance_pass_count,
+        usd_pass_count,
+        len(cleaned),
+    )
+    if html_row_count == 0:
+        raise RuntimeError("HTML parsing found zero table rows")
+    if raw_candidate_count == 0:
+        logging.warning("No raw event row candidates found for %s to %s", start, end)
+    if not cleaned:
+        logging.warning(
+            "No final events for %s to %s after filters; candidates=%d importance_3_pass=%d usd_filter_pass=%d",
+            start,
+            end,
+            raw_candidate_count,
+            importance_pass_count,
+            usd_pass_count,
+        )
     return cleaned
 
 
@@ -317,7 +426,7 @@ def fetch_events(start: date, end: date, updated_at: str) -> list[dict[str, Any]
     for chunk_start, chunk_end in iter_request_ranges(start, end):
         logging.info("Requesting Investing.com chunk from %s to %s", chunk_start, chunk_end)
         html = fetch_calendar_html(session, chunk_start, chunk_end)
-        events.extend(parse_events(html, start, end, updated_at))
+        events.extend(parse_events(html, chunk_start, chunk_end, updated_at))
 
     events.sort(key=lambda item: (item["date"], item["time"], item["raw_name"]))
     deduped: list[dict[str, Any]] = []
@@ -331,20 +440,52 @@ def fetch_events(start: date, end: date, updated_at: str) -> list[dict[str, Any]
     return deduped
 
 
-def write_json(events: list[dict[str, Any]]) -> None:
+def build_payload(status: str, updated_at: str | None, events: list[dict[str, Any]], error: str | None = None) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "status": status,
+        "updated_at": updated_at,
+        "source": "investing",
+        "events": events,
+    }
+    if error:
+        payload["error"] = error
+    return payload
+
+
+def write_json(payload: dict[str, Any]) -> None:
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     temp_path = OUTPUT_PATH.with_suffix(".json.tmp")
-    temp_path.write_text(json.dumps(events, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    temp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     temp_path.replace(OUTPUT_PATH)
 
 
-def preserve_existing_or_create_empty(reason: str) -> None:
-    logging.error("Economic calendar update skipped: %s", reason)
-    if OUTPUT_PATH.exists():
-        logging.info("Keeping existing JSON file: %s", OUTPUT_PATH)
+def load_existing_payload() -> Any:
+    if not OUTPUT_PATH.exists():
+        return None
+    try:
+        return json.loads(OUTPUT_PATH.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logging.warning("Existing economic calendar JSON is invalid and cannot be preserved as valid data: %s", exc)
+        return None
+
+
+def has_existing_successful_events(payload: Any) -> bool:
+    if isinstance(payload, list):
+        return len([item for item in payload if isinstance(item, dict)]) > 0
+    if isinstance(payload, dict):
+        events = payload.get("events")
+        return payload.get("status") == "ok" and isinstance(events, list) and len(events) > 0
+    return False
+
+
+def preserve_existing_or_write_failure(reason: str, updated_at: str) -> None:
+    logging.error("Economic calendar fetch failed: %s", reason)
+    existing = load_existing_payload()
+    if has_existing_successful_events(existing):
+        logging.info("Keeping existing successful JSON file with events: %s", OUTPUT_PATH)
         return
-    logging.warning("Existing JSON file not found. Creating an empty array at %s", OUTPUT_PATH)
-    write_json([])
+    logging.warning("Writing fetch_failed status JSON to %s", OUTPUT_PATH)
+    write_json(build_payload("fetch_failed", updated_at, [], error=reason[:500]))
 
 
 def main() -> int:
@@ -355,13 +496,20 @@ def main() -> int:
 
     try:
         events = fetch_events(start, end, updated_at)
+        status = "ok" if events else "empty"
         if not events:
-            raise RuntimeError("parsed event list is empty")
-        write_json(events)
-        logging.info("Wrote %d events to %s", len(events), OUTPUT_PATH)
+            logging.warning(
+                "Investing.com collection succeeded but final events count is 0 after date/importance/USD filters for %s to %s",
+                start,
+                end,
+            )
+        write_json(build_payload(status, updated_at, events))
+        logging.info("Wrote status=%s events=%d to %s", status, len(events), OUTPUT_PATH)
+        return 0
     except Exception as exc:
-        preserve_existing_or_create_empty(str(exc))
-    return 0
+        preserve_existing_or_write_failure(str(exc), updated_at)
+        logging.error("Exiting with code 1 so GitHub Actions does not hide the fetch/parsing failure")
+        return 1
 
 
 if __name__ == "__main__":
