@@ -13,6 +13,8 @@ import json
 import logging
 import re
 import sys
+import time as time_module
+from email.utils import parsedate_to_datetime
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -27,8 +29,10 @@ INVESTING_CALENDAR_URL = "https://www.investing.com/economic-calendar/"
 INVESTING_ENDPOINT = "https://www.investing.com/economic-calendar/Service/getCalendarFilteredData"
 KST = ZoneInfo("Asia/Seoul")
 FETCH_DAYS = 35
-REQUEST_WINDOW_DAYS = 14
+REQUEST_WINDOW_DAYS = 17
 TIMEOUT_SECONDS = 10
+CHUNK_SLEEP_SECONDS = 12
+HTTP_429_FALLBACK_SLEEP_SECONDS = 60
 
 
 class PayloadCandidate(NamedTuple):
@@ -44,11 +48,20 @@ class CandidateResult(NamedTuple):
     stats: dict[str, int]
 
 
+class ChunkFetchError(RuntimeError):
+    """Raised when one Investing.com request chunk fails without invalidating prior chunks."""
+
+
+class FetchResult(NamedTuple):
+    events: list[dict[str, Any]]
+    failed_chunks: list[str]
+    selected_candidate: PayloadCandidate | None
+
 PAYLOAD_CANDIDATES = (
-    PayloadCandidate("candidate_1_ddmmyyyy_tz88", "%d/%m/%Y", "88"),
     PayloadCandidate("candidate_2_iso_tz88", "%Y-%m-%d", "88"),
-    PayloadCandidate("candidate_3_ddmmyyyy_tz55", "%d/%m/%Y", "55"),
+    PayloadCandidate("candidate_1_ddmmyyyy_tz88", "%d/%m/%Y", "88"),
     PayloadCandidate("candidate_4_iso_tz55", "%Y-%m-%d", "55"),
+    PayloadCandidate("candidate_3_ddmmyyyy_tz55", "%d/%m/%Y", "55"),
 )
 
 HEADERS = {
@@ -381,13 +394,91 @@ def log_candidate_attempt(
     )
 
 
-def fetch_calendar_chunk(session: requests.Session, start: date, end: date, updated_at: str) -> CandidateResult:
+def candidate_date_format_label(candidate: PayloadCandidate) -> str:
+    return "DD/MM/YYYY" if candidate.date_format == "%d/%m/%Y" else "YYYY-MM-DD"
+
+
+def retry_after_seconds(response: requests.Response) -> int | None:
+    raw_value = response.headers.get("Retry-After")
+    logging.warning("HTTP 429 Retry-After header value: %s", raw_value if raw_value is not None else "-")
+    if not raw_value:
+        return None
+    try:
+        return max(0, int(raw_value.strip()))
+    except ValueError:
+        pass
+    try:
+        retry_at = parsedate_to_datetime(raw_value)
+        now = datetime.now(retry_at.tzinfo) if retry_at.tzinfo else datetime.now()
+        return max(0, int((retry_at - now).total_seconds()))
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def post_candidate_with_429_retry(
+    session: requests.Session,
+    candidate: PayloadCandidate,
+    start: date,
+    end: date,
+    payload: dict[str, Any],
+) -> requests.Response:
+    logging.info(
+        "Chunk POST start: %s to %s candidate=%s date_format=%s timeZone=%s",
+        start,
+        end,
+        candidate.name,
+        candidate_date_format_label(candidate),
+        candidate.timezone,
+    )
+    response = session.post(INVESTING_ENDPOINT, data=payload, timeout=TIMEOUT_SECONDS)
+    logging.info(
+        "Chunk POST end: %s to %s candidate=%s status=%s length=%s",
+        start,
+        end,
+        candidate.name,
+        response.status_code,
+        len(response.text or ""),
+    )
+    if response.status_code != 429:
+        return response
+
+    retry_after = retry_after_seconds(response)
+    sleep_seconds = retry_after if retry_after is not None else HTTP_429_FALLBACK_SLEEP_SECONDS
+    logging.warning(
+        "HTTP 429 for chunk %s to %s candidate=%s; sleeping %s seconds before one retry",
+        start,
+        end,
+        candidate.name,
+        sleep_seconds,
+    )
+    time_module.sleep(sleep_seconds)
+    logging.info(
+        "Chunk POST retry start: %s to %s candidate=%s date_format=%s timeZone=%s",
+        start,
+        end,
+        candidate.name,
+        candidate_date_format_label(candidate),
+        candidate.timezone,
+    )
+    retry_response = session.post(INVESTING_ENDPOINT, data=payload, timeout=TIMEOUT_SECONDS)
+    logging.info(
+        "Chunk POST retry end: %s to %s candidate=%s status=%s length=%s",
+        start,
+        end,
+        candidate.name,
+        retry_response.status_code,
+        len(retry_response.text or ""),
+    )
+    if retry_response.status_code == 429:
+        retry_after_seconds(retry_response)
+    return retry_response
+
+
+def fetch_landing_page_once(session: requests.Session) -> None:
     try:
         landing_response = session.get(INVESTING_CALENDAR_URL, timeout=TIMEOUT_SECONDS)
         logging.info(
-            "Landing page response for chunk %s to %s: status=%s length=%s content_type=%s preview=%r",
-            start,
-            end,
+            "Landing page response for run: status=%s length=%s content_type=%s preview=%r",
             landing_response.status_code,
             len(landing_response.text or ""),
             landing_response.headers.get("Content-Type", ""),
@@ -397,8 +488,25 @@ def fetch_calendar_chunk(session: requests.Session, start: date, end: date, upda
     except requests.RequestException as exc:
         raise RuntimeError(f"Investing.com landing request failed: {exc}") from exc
 
+
+def fetch_calendar_chunk(
+    session: requests.Session,
+    start: date,
+    end: date,
+    updated_at: str,
+    selected_candidate: PayloadCandidate | None = None,
+) -> CandidateResult:
+    candidates = (selected_candidate,) if selected_candidate else PAYLOAD_CANDIDATES
+    logging.info(
+        "Chunk request start: %s to %s candidate_mode=%s candidates=%s",
+        start,
+        end,
+        "selected" if selected_candidate else "discovery",
+        ",".join(candidate.name for candidate in candidates),
+    )
+
     failures: list[str] = []
-    for candidate in PAYLOAD_CANDIDATES:
+    for candidate in candidates:
         payload = base_payload(candidate, start, end)
         response: requests.Response | None = None
         json_has_data = False
@@ -408,8 +516,25 @@ def fetch_calendar_chunk(session: requests.Session, start: date, end: date, upda
         error: str | None = None
 
         try:
-            response = session.post(INVESTING_ENDPOINT, data=payload, timeout=TIMEOUT_SECONDS)
+            response = post_candidate_with_429_retry(session, candidate, start, end, payload)
             text = response.text.strip()
+            if response.status_code == 429:
+                error = "HTTP 429 after retry"
+                log_candidate_attempt(
+                    candidate=candidate,
+                    start=start,
+                    end=end,
+                    response=response,
+                    payload=payload,
+                    json_has_data=json_has_data,
+                    html_row_count=html_row_count,
+                    raw_candidate_count=raw_candidate_count,
+                    final_events_count=final_events_count,
+                    error=error,
+                )
+                failures.append(f"{candidate.name}({payload['dateFrom']}..{payload['dateTo']}, tz={candidate.timezone}): {error}")
+                logging.warning("Chunk request failed with HTTP 429 after retry: %s to %s", start, end)
+                raise ChunkFetchError(f"HTTP 429 after retry for chunk {start} to {end}")
             if response.status_code != 200:
                 error = f"HTTP {response.status_code}"
             elif is_cloudflare_challenge(text):
@@ -448,15 +573,18 @@ def fetch_calendar_chunk(session: requests.Session, start: date, end: date, upda
                                 error=None,
                             )
                             logging.info(
-                                "Selected Investing.com payload candidate for %s to %s: name=%s date_format=%s timeZone=%s events=%d",
+                                "Selected Investing.com payload candidate: name=%s date_format=%s timeZone=%s chunk=%s to %s events=%d",
+                                candidate.name,
+                                candidate_date_format_label(candidate),
+                                candidate.timezone,
                                 start,
                                 end,
-                                candidate.name,
-                                "DD/MM/YYYY" if candidate.date_format == "%d/%m/%Y" else "YYYY-MM-DD",
-                                candidate.timezone,
                                 len(events),
                             )
+                            logging.info("Chunk request end: %s to %s events=%d", start, end, len(events))
                             return CandidateResult(html, candidate, events, stats)
+        except ChunkFetchError:
+            raise
         except requests.RequestException as exc:
             error = f"request failed: {exc}"
         except Exception as exc:
@@ -476,7 +604,9 @@ def fetch_calendar_chunk(session: requests.Session, start: date, end: date, upda
         )
         failures.append(f"{candidate.name}({payload['dateFrom']}..{payload['dateTo']}, tz={candidate.timezone}): {error}")
 
-    raise RuntimeError(f"All Investing.com payload candidates failed for {start} to {end}: " + " | ".join(failures))
+    logging.warning("Chunk request failed: %s to %s failures=%s", start, end, " | ".join(failures))
+    raise ChunkFetchError(f"All Investing.com payload candidates failed for {start} to {end}: " + " | ".join(failures))
+
 
 def row_currency(row: Tag) -> str:
     return cell_text(row, ("td.flagCur", ".flagCur", "td.left.flagCur")) or clean_text(row.get("data-event-currency"))
@@ -587,25 +717,16 @@ def parse_events(
 
 
 def iter_request_ranges(start: date, end: date) -> list[tuple[date, date]]:
-    """Split the 35-day target range into smaller inclusive Investing.com requests."""
-    ranges: list[tuple[date, date]] = []
-    chunk_start = start
-    while chunk_start <= end:
-        chunk_end = min(chunk_start + timedelta(days=REQUEST_WINDOW_DAYS), end)
-        ranges.append((chunk_start, chunk_end))
-        chunk_start = chunk_end + timedelta(days=1)
+    """Use two inclusive requests for the 35-day target window to minimize calls."""
+    first_end = min(start + timedelta(days=REQUEST_WINDOW_DAYS), end)
+    ranges = [(start, first_end)]
+    second_start = first_end + timedelta(days=1)
+    if second_start <= end:
+        ranges.append((second_start, end))
     return ranges
 
 
-def fetch_events(start: date, end: date, updated_at: str) -> list[dict[str, Any]]:
-    events: list[dict[str, Any]] = []
-    session = requests.Session()
-    session.headers.update(HEADERS)
-    for chunk_start, chunk_end in iter_request_ranges(start, end):
-        logging.info("Requesting Investing.com chunk from %s to %s", chunk_start, chunk_end)
-        result = fetch_calendar_chunk(session, chunk_start, chunk_end, updated_at)
-        events.extend(result.events)
-
+def dedupe_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     events.sort(key=lambda item: (item["date"], item["time"], item["raw_name"]))
     deduped: list[dict[str, Any]] = []
     seen = set()
@@ -616,6 +737,60 @@ def fetch_events(start: date, end: date, updated_at: str) -> list[dict[str, Any]
         seen.add(dedupe_key)
         deduped.append(event)
     return deduped
+
+
+def fetch_events(start: date, end: date, updated_at: str) -> FetchResult:
+    events: list[dict[str, Any]] = []
+    failed_chunks: list[str] = []
+    selected_candidate: PayloadCandidate | None = None
+    session = requests.Session()
+    session.headers.update(HEADERS)
+    fetch_landing_page_once(session)
+
+    ranges = iter_request_ranges(start, end)
+    for index, (chunk_start, chunk_end) in enumerate(ranges):
+        if index > 0:
+            logging.info(
+                "Sleeping %s seconds before next Investing.com chunk POST to reduce 429 risk",
+                CHUNK_SLEEP_SECONDS,
+            )
+            time_module.sleep(CHUNK_SLEEP_SECONDS)
+
+        logging.info(
+            "Requesting Investing.com chunk %d/%d from %s to %s selected_candidate=%s",
+            index + 1,
+            len(ranges),
+            chunk_start,
+            chunk_end,
+            selected_candidate.name if selected_candidate else "-",
+        )
+        try:
+            result = fetch_calendar_chunk(session, chunk_start, chunk_end, updated_at, selected_candidate)
+        except ChunkFetchError as exc:
+            failure = str(exc)
+            failed_chunks.append(failure)
+            logging.warning("Chunk %s to %s failed but prior events will be preserved if any: %s", chunk_start, chunk_end, failure)
+            continue
+
+        if selected_candidate is None:
+            selected_candidate = result.candidate
+            logging.info(
+                "Persisting selected_candidate for subsequent chunks: name=%s date_format=%s timeZone=%s",
+                selected_candidate.name,
+                candidate_date_format_label(selected_candidate),
+                selected_candidate.timezone,
+            )
+        logging.info("Chunk %s to %s yielded events=%d", chunk_start, chunk_end, len(result.events))
+        events.extend(result.events)
+
+    deduped = dedupe_events(events)
+    logging.info(
+        "Fetch result summary: selected_candidate=%s failed_chunks=%d final_deduped_events=%d",
+        selected_candidate.name if selected_candidate else "-",
+        len(failed_chunks),
+        len(deduped),
+    )
+    return FetchResult(deduped, failed_chunks, selected_candidate)
 
 
 def build_payload(status: str, updated_at: str | None, events: list[dict[str, Any]], error: str | None = None) -> dict[str, Any]:
@@ -651,7 +826,7 @@ def has_existing_successful_events(payload: Any) -> bool:
         return len([item for item in payload if isinstance(item, dict)]) > 0
     if isinstance(payload, dict):
         events = payload.get("events")
-        return payload.get("status") == "ok" and isinstance(events, list) and len(events) > 0
+        return payload.get("status") in {"ok", "partial"} and isinstance(events, list) and len(events) > 0
     return False
 
 
@@ -666,9 +841,11 @@ def preserve_existing_or_write_failure(reason: str, updated_at: str) -> None:
             len(existing_events),
         )
         write_json(build_payload("fetch_failed", existing_updated_at or updated_at, existing_events, error=reason[:500]))
+        logging.info("Final save status=fetch_failed events_count=%d partial=False output=%s", len(existing_events), OUTPUT_PATH)
         return
     logging.warning("Writing fetch_failed status JSON to %s", OUTPUT_PATH)
     write_json(build_payload("fetch_failed", updated_at, [], error=reason[:500]))
+    logging.info("Final save status=fetch_failed events_count=0 partial=False output=%s", OUTPUT_PATH)
 
 
 def main() -> int:
@@ -678,16 +855,29 @@ def main() -> int:
     logging.info("Fetching Investing.com U.S. high-importance calendar from %s to %s", start, end)
 
     try:
-        events = fetch_events(start, end, updated_at)
-        status = "ok" if events else "empty"
-        if not events:
+        result = fetch_events(start, end, updated_at)
+        events = result.events
+        if result.failed_chunks and events:
+            status = "partial"
+            error = f"Some chunks failed. Showing partial events. {' | '.join(result.failed_chunks)}"
+            logging.warning("Partial save enabled: failed_chunks=%d events=%d", len(result.failed_chunks), len(events))
+        elif result.failed_chunks:
+            reason = "All requested chunks failed: " + " | ".join(result.failed_chunks)
+            preserve_existing_or_write_failure(reason, updated_at)
+            logging.error("Final save status=fetch_failed events_count=0 or preserved existing events; source collection yielded no new events")
+            return 1
+        else:
+            status = "ok" if events else "empty"
+            error = None
+
+        if not events and status == "empty":
             logging.warning(
                 "Investing.com collection succeeded but final events count is 0 after date/importance/USD filters for %s to %s",
                 start,
                 end,
             )
-        write_json(build_payload(status, updated_at, events))
-        logging.info("Wrote status=%s events=%d to %s", status, len(events), OUTPUT_PATH)
+        write_json(build_payload(status, updated_at, events, error=error[:500] if error else None))
+        logging.info("Final save status=%s events_count=%d partial=%s output=%s", status, len(events), status == "partial", OUTPUT_PATH)
         return 0
     except Exception as exc:
         preserve_existing_or_write_failure(str(exc), updated_at)

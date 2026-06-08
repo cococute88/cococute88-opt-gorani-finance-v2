@@ -300,9 +300,16 @@ def render_us_economic_calendar_section() -> None:
         st.info("경제 일정 데이터가 아직 생성되지 않았습니다. GitHub Actions에서 Update Economic Calendar를 수동 실행해 주세요.")
         _render_economic_calendar_debug(debug_info)
         return
+    if status == "partial":
+        if events:
+            st.warning("일부 경제 일정만 업데이트되었습니다. 마지막 수집 중 일부 구간은 실패했습니다.")
+        else:
+            st.warning("경제 일정 자동 수집에 실패했습니다. GitHub Actions 로그를 확인해 주세요.")
+            _render_economic_calendar_debug(debug_info)
+            return
     if status == "fetch_failed":
         if events:
-            st.warning("경제 일정 자동 수집에 실패했습니다. 마지막 정상 데이터를 표시합니다.")
+            st.warning("자동 수집에 실패했습니다. 마지막 정상 데이터를 표시합니다.")
         else:
             st.warning("경제 일정 자동 수집에 실패했습니다. GitHub Actions 로그를 확인해 주세요.")
             _render_economic_calendar_debug(debug_info)
