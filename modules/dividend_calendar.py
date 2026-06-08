@@ -18,6 +18,7 @@ from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 import yfinance as yf
 from dateutil.relativedelta import relativedelta
 from pandas.tseries.holiday import USFederalHolidayCalendar
@@ -83,6 +84,67 @@ CUSTOM_SYMBOLS = ["없음", "⚠", "※", "ⓔ"]
 _US_CAL = USFederalHolidayCalendar()
 _US_HOLIDAYS = _US_CAL.holidays(start='2020-01-01', end='2035-12-31')
 
+
+
+# ---------------------------------------------------------------------------
+# External economic calendar widget
+# ---------------------------------------------------------------------------
+def render_us_economic_calendar_widget() -> None:
+    """Render Investing.com Economic Calendar widget for high-importance U.S. events."""
+    widget_src = (
+        "https://sslecal2.investing.com"
+        "?columns=exc_flags,exc_currency,exc_importance,exc_actual,exc_forecast,exc_previous"
+        "&importance=3"
+        "&features=datepicker,timezone,timeselector,filters"
+        "&countries=5"
+        "&calType=week"
+        "&timeZone=88"
+        "&lang=1"
+    )
+
+    st.divider()
+    st.markdown("### 📅 미국 중요 경제 일정")
+    st.caption("이번 주/다음 주의 중요도 높은 미국 경제지표를 확인합니다.")
+    st.caption("외부 위젯이 표시되지 않으면 [Investing.com 경제캘린더](https://www.investing.com/economic-calendar/)를 직접 확인하세요.")
+
+    components.html(
+        f"""
+        <div style="
+            width: 100%;
+            max-width: 100%;
+            overflow: hidden;
+            border: 1px solid rgba(148, 163, 184, 0.24);
+            border-radius: 14px;
+            background: #0f172a;
+            box-shadow: 0 12px 28px rgba(0, 0, 0, 0.24);
+        ">
+            <iframe
+                src="{widget_src}"
+                width="100%"
+                height="580"
+                frameborder="0"
+                allowtransparency="true"
+                marginwidth="0"
+                marginheight="0"
+                style="display:block; width:100%; max-width:100%; border:0; background:#0f172a;"
+                title="Investing.com Economic Calendar">
+            </iframe>
+        </div>
+        <div style="
+            margin-top: 6px;
+            font-family: Arial, Helvetica, sans-serif;
+            font-size: 11px;
+            color: rgba(226, 232, 240, 0.65);
+            text-align: right;
+        ">
+            Real Time Economic Calendar provided by
+            <a href="https://www.investing.com/" rel="nofollow noopener" target="_blank"
+               style="color:#60a5fa; font-weight:700; text-decoration:none;">Investing.com</a>.
+        </div>
+        """,
+        height=620,
+        scrolling=False,
+    )
 
 # ---------------------------------------------------------------------------
 # Trading Day & Pattern Logic
@@ -1194,6 +1256,8 @@ def render() -> None:
         else: master_df = master_df.iloc[0:0]
         st.caption(f"{len(master_df):,} event(s) shown")
         st.dataframe(master_df, use_container_width=True, hide_index=True)
+
+    render_us_economic_calendar_widget()
 
 if __name__ == "__main__":
     st.set_page_config(page_title="GORANI FINANCE · Dividend Calendar", page_icon="📅", layout="wide", initial_sidebar_state="expanded")
