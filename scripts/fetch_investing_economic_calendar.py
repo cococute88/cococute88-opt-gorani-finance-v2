@@ -15,7 +15,7 @@ import re
 import sys
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 from zoneinfo import ZoneInfo
 
 import requests
@@ -30,6 +30,27 @@ FETCH_DAYS = 35
 REQUEST_WINDOW_DAYS = 14
 TIMEOUT_SECONDS = 10
 
+
+class PayloadCandidate(NamedTuple):
+    name: str
+    date_format: str
+    timezone: str
+
+
+class CandidateResult(NamedTuple):
+    html: str
+    candidate: PayloadCandidate
+    events: list[dict[str, Any]]
+    stats: dict[str, int]
+
+
+PAYLOAD_CANDIDATES = (
+    PayloadCandidate("candidate_1_ddmmyyyy_tz88", "%d/%m/%Y", "88"),
+    PayloadCandidate("candidate_2_iso_tz88", "%Y-%m-%d", "88"),
+    PayloadCandidate("candidate_3_ddmmyyyy_tz55", "%d/%m/%Y", "55"),
+    PayloadCandidate("candidate_4_iso_tz55", "%Y-%m-%d", "55"),
+)
+
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -37,7 +58,7 @@ HEADERS = {
     ),
     "Accept": "application/json, text/javascript, */*; q=0.01",
     "Accept-Language": "en-US,en;q=0.9,ko;q=0.8",
-    "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+    "Content-Type": "application/x-www-form-urlencoded",
     "Origin": "https://www.investing.com",
     "Referer": INVESTING_CALENDAR_URL,
     "X-Requested-With": "XMLHttpRequest",
@@ -118,7 +139,18 @@ def clean_text(value: str | None) -> str:
     return re.sub(r"\s+", " ", value).strip()
 
 
-def parse_investing_date(raw: str, current_date: date | None) -> tuple[str, str, datetime | None]:
+def parse_investing_date(
+    raw: str,
+    current_date: date | None,
+    timezone_id: str,
+) -> tuple[str, str, datetime | None, str, str]:
+    """Parse Investing.com row datetime and normalize it to KST.
+
+    Investing.com returns ``data-event-datetime`` as a naive string. In the
+    tested payload matrix, timezone id 88 is treated as already being Seoul/KST,
+    while timezone id 55 is treated as UTC/GMT and converted to Asia/Seoul.
+    The final two return values are compact raw/conversion strings for logging.
+    """
     raw = clean_text(raw)
     candidates = [raw]
     if current_date and re.fullmatch(r"\d{1,2}:\d{2}", raw):
@@ -129,25 +161,48 @@ def parse_investing_date(raw: str, current_date: date | None) -> tuple[str, str,
         "%Y/%m/%d %H:%M",
         "%Y-%m-%d %H:%M:%S",
         "%Y-%m-%d %H:%M",
-        "%m/%d/%Y %H:%M:%S",
-        "%m/%d/%Y %H:%M",
+        "%d/%m/%Y %H:%M:%S",
+        "%d/%m/%Y %H:%M",
         "%b %d, %Y %H:%M",
         "%B %d, %Y %H:%M",
     )
     for candidate in candidates:
         for fmt in formats:
             try:
-                dt = datetime.strptime(candidate, fmt).replace(tzinfo=KST)
-                return dt.strftime("%Y-%m-%d"), dt.strftime("%H:%M"), dt
+                naive_dt = datetime.strptime(candidate, fmt)
+                if timezone_id == "55":
+                    source_dt = naive_dt.replace(tzinfo=ZoneInfo("UTC"))
+                    kst_dt = source_dt.astimezone(KST)
+                else:
+                    source_dt = naive_dt.replace(tzinfo=KST)
+                    kst_dt = source_dt
+                return (
+                    kst_dt.strftime("%Y-%m-%d"),
+                    kst_dt.strftime("%H:%M"),
+                    kst_dt,
+                    f"{raw} ({source_dt.isoformat()})",
+                    kst_dt.isoformat(),
+                )
             except ValueError:
                 continue
 
     time_match = re.search(r"(\d{1,2}:\d{2})", raw)
     if current_date and time_match:
-        dt = datetime.combine(current_date, time.fromisoformat(time_match.group(1)), tzinfo=KST)
-        return dt.strftime("%Y-%m-%d"), dt.strftime("%H:%M"), dt
-    return "", "", None
-
+        naive_dt = datetime.combine(current_date, time.fromisoformat(time_match.group(1)))
+        if timezone_id == "55":
+            source_dt = naive_dt.replace(tzinfo=ZoneInfo("UTC"))
+            kst_dt = source_dt.astimezone(KST)
+        else:
+            source_dt = naive_dt.replace(tzinfo=KST)
+            kst_dt = source_dt
+        return (
+            kst_dt.strftime("%Y-%m-%d"),
+            kst_dt.strftime("%H:%M"),
+            kst_dt,
+            f"{raw} ({source_dt.isoformat()})",
+            kst_dt.isoformat(),
+        )
+    return "", "", None, raw, ""
 
 def parse_date_header(text: str, fallback_year: int) -> date | None:
     text = clean_text(text)
@@ -198,7 +253,15 @@ def extract_raw_name(row: Tag) -> str:
     return cols[3] if len(cols) > 3 else ""
 
 
-def extract_event(row: Tag, current_date: date | None, start: date, end: date, updated_at: str) -> dict[str, Any] | None:
+def extract_event(
+    row: Tag,
+    current_date: date | None,
+    start: date,
+    end: date,
+    updated_at: str,
+    timezone_id: str,
+    datetime_examples: list[tuple[str, str]],
+) -> dict[str, Any] | None:
     importance = importance_from_row(row)
     if importance < 3:
         return None
@@ -216,9 +279,11 @@ def extract_event(row: Tag, current_date: date | None, start: date, end: date, u
         return None
 
     raw_datetime = clean_text(row.get("data-event-datetime")) or cell_text(row, ("td.first", "td.time", ".time"))
-    event_date, event_time, sort_dt = parse_investing_date(raw_datetime, current_date)
+    event_date, event_time, sort_dt, raw_dt_log, kst_dt_log = parse_investing_date(raw_datetime, current_date, timezone_id)
     if not sort_dt:
         return None
+    if raw_dt_log and kst_dt_log and not datetime_examples:
+        datetime_examples.append((raw_dt_log, kst_dt_log))
     if sort_dt.date() < start or sort_dt.date() > end:
         return None
 
@@ -253,19 +318,70 @@ def is_cloudflare_challenge(text: str) -> bool:
     return any(marker in lowered for marker in challenge_markers)
 
 
-def log_response_debug(chunk_start: date, chunk_end: date, response: requests.Response) -> None:
+def base_payload(candidate: PayloadCandidate, start: date, end: date) -> dict[str, Any]:
+    return {
+        "country[]": ["5"],  # Investing.com country id for United States.
+        "importance[]": ["3"],
+        "dateFrom": start.strftime(candidate.date_format),
+        "dateTo": end.strftime(candidate.date_format),
+        "timeZone": candidate.timezone,
+        "timeFilter": "timeRemain",
+        "currentTab": "custom",
+        "submitFilters": "1",
+        "limit_from": "0",
+    }
+
+
+def html_counts(html: str) -> tuple[int, int]:
+    soup = BeautifulSoup(html, "html.parser")
+    rows = soup.select("tr")
+    raw_candidates = soup.select("tr.js-event-item, tr[id^='eventRowId_']")
+    if not raw_candidates:
+        raw_candidates = [
+            row
+            for row in rows
+            if row.get("data-event-datetime") or str(row.get("id", "")).startswith("eventRowId_")
+        ]
+    return len(rows), len(raw_candidates)
+
+
+def log_candidate_attempt(
+    *,
+    candidate: PayloadCandidate,
+    start: date,
+    end: date,
+    response: requests.Response | None,
+    payload: dict[str, Any],
+    json_has_data: bool,
+    html_row_count: int,
+    raw_candidate_count: int,
+    final_events_count: int | str,
+    error: str | None = None,
+) -> None:
     logging.info(
-        "Chunk %s to %s response: status=%s length=%s content_type=%s preview=%r",
-        chunk_start,
-        chunk_end,
-        response.status_code,
-        len(response.text or ""),
-        response.headers.get("Content-Type", ""),
-        response_preview(response.text or ""),
+        (
+            "Investing.com payload candidate result: name=%s date_format=%s timeZone=%s "
+            "dateFrom=%s dateTo=%s status=%s length=%s content_type=%s preview=%r "
+            "json_data=%s html_row_count=%s raw_event_row_candidates=%s final_events=%s error=%s"
+        ),
+        candidate.name,
+        "DD/MM/YYYY" if candidate.date_format == "%d/%m/%Y" else "YYYY-MM-DD",
+        candidate.timezone,
+        payload["dateFrom"],
+        payload["dateTo"],
+        response.status_code if response is not None else "request_failed",
+        len(response.text or "") if response is not None else 0,
+        response.headers.get("Content-Type", "") if response is not None else "",
+        response_preview(response.text or "") if response is not None else "",
+        json_has_data,
+        html_row_count,
+        raw_candidate_count,
+        final_events_count,
+        error,
     )
 
 
-def fetch_calendar_html(session: requests.Session, start: date, end: date) -> str:
+def fetch_calendar_chunk(session: requests.Session, start: date, end: date, updated_at: str) -> CandidateResult:
     try:
         landing_response = session.get(INVESTING_CALENDAR_URL, timeout=TIMEOUT_SECONDS)
         logging.info(
@@ -281,52 +397,86 @@ def fetch_calendar_html(session: requests.Session, start: date, end: date) -> st
     except requests.RequestException as exc:
         raise RuntimeError(f"Investing.com landing request failed: {exc}") from exc
 
-    payload = {
-        "country[]": ["5"],  # Investing.com country id for United States.
-        "importance[]": ["3"],
-        "dateFrom": start.strftime("%m/%d/%Y"),
-        "dateTo": end.strftime("%m/%d/%Y"),
-        "timeZone": "88",  # Seoul/KST in Investing.com's calendar widget.
-        "timeFilter": "timeRemain",
-        "currentTab": "custom",
-        "limit_from": "0",
-    }
-    try:
-        response = session.post(INVESTING_ENDPOINT, data=payload, timeout=TIMEOUT_SECONDS)
-    except requests.RequestException as exc:
-        raise RuntimeError(f"Investing.com calendar request failed for {start} to {end}: {exc}") from exc
+    failures: list[str] = []
+    for candidate in PAYLOAD_CANDIDATES:
+        payload = base_payload(candidate, start, end)
+        response: requests.Response | None = None
+        json_has_data = False
+        html_row_count = 0
+        raw_candidate_count = 0
+        final_events_count: int | str = 0
+        error: str | None = None
 
-    log_response_debug(start, end, response)
-    text = response.text.strip()
-
-    if response.status_code in {403, 429} or response.status_code >= 500:
-        raise RuntimeError(f"Investing.com returned HTTP {response.status_code} for {start} to {end}")
-    try:
-        response.raise_for_status()
-    except requests.RequestException as exc:
-        raise RuntimeError(f"Investing.com returned HTTP {response.status_code} for {start} to {end}: {exc}") from exc
-
-    if is_cloudflare_challenge(text):
-        raise RuntimeError("Investing.com returned a Cloudflare challenge")
-
-    content_type = response.headers.get("Content-Type", "").lower()
-    if "json" in content_type:
         try:
-            decoded = response.json()
-        except ValueError as exc:
-            raise RuntimeError("Investing.com JSON response parsing failed") from exc
+            response = session.post(INVESTING_ENDPOINT, data=payload, timeout=TIMEOUT_SECONDS)
+            text = response.text.strip()
+            if response.status_code != 200:
+                error = f"HTTP {response.status_code}"
+            elif is_cloudflare_challenge(text):
+                error = "Cloudflare challenge detected"
+            else:
+                try:
+                    decoded = response.json()
+                except ValueError:
+                    decoded = None
+                    error = "response is not valid JSON"
 
-        html = decoded.get("data") if isinstance(decoded, dict) else None
-        if not isinstance(html, str) or not html.strip():
-            raise RuntimeError("Investing.com response JSON does not contain calendar HTML")
-        if is_cloudflare_challenge(html):
-            raise RuntimeError("Investing.com returned a Cloudflare challenge inside calendar HTML")
-        return html
+                html = decoded.get("data") if isinstance(decoded, dict) else None
+                json_has_data = isinstance(html, str) and bool(html.strip())
+                if not json_has_data:
+                    error = error or "JSON data field is missing or empty"
+                else:
+                    if is_cloudflare_challenge(html):
+                        error = "Cloudflare challenge detected inside JSON data"
+                    else:
+                        html_row_count, raw_candidate_count = html_counts(html)
+                        if html_row_count == 0 or raw_candidate_count == 0:
+                            error = "JSON data HTML does not contain tr/js-event-item event rows"
+                        else:
+                            events, stats = parse_events(html, start, end, updated_at, candidate)
+                            final_events_count = stats["final_events_count"]
+                            log_candidate_attempt(
+                                candidate=candidate,
+                                start=start,
+                                end=end,
+                                response=response,
+                                payload=payload,
+                                json_has_data=json_has_data,
+                                html_row_count=stats["html_row_count"],
+                                raw_candidate_count=stats["raw_candidate_count"],
+                                final_events_count=final_events_count,
+                                error=None,
+                            )
+                            logging.info(
+                                "Selected Investing.com payload candidate for %s to %s: name=%s date_format=%s timeZone=%s events=%d",
+                                start,
+                                end,
+                                candidate.name,
+                                "DD/MM/YYYY" if candidate.date_format == "%d/%m/%Y" else "YYYY-MM-DD",
+                                candidate.timezone,
+                                len(events),
+                            )
+                            return CandidateResult(html, candidate, events, stats)
+        except requests.RequestException as exc:
+            error = f"request failed: {exc}"
+        except Exception as exc:
+            error = f"candidate parsing/validation failed: {exc}"
 
-    if not text:
-        raise RuntimeError("Investing.com returned an empty response body")
-    return text
+        log_candidate_attempt(
+            candidate=candidate,
+            start=start,
+            end=end,
+            response=response,
+            payload=payload,
+            json_has_data=json_has_data,
+            html_row_count=html_row_count,
+            raw_candidate_count=raw_candidate_count,
+            final_events_count=final_events_count,
+            error=error,
+        )
+        failures.append(f"{candidate.name}({payload['dateFrom']}..{payload['dateTo']}, tz={candidate.timezone}): {error}")
 
+    raise RuntimeError(f"All Investing.com payload candidates failed for {start} to {end}: " + " | ".join(failures))
 
 def row_currency(row: Tag) -> str:
     return cell_text(row, ("td.flagCur", ".flagCur", "td.left.flagCur")) or clean_text(row.get("data-event-currency"))
@@ -337,7 +487,13 @@ def row_country_is_us(row: Tag) -> bool:
     return not country_attr or country_attr.lower() in {"united states", "usa", "us"}
 
 
-def parse_events(html: str, start: date, end: date, updated_at: str) -> list[dict[str, Any]]:
+def parse_events(
+    html: str,
+    start: date,
+    end: date,
+    updated_at: str,
+    candidate: PayloadCandidate,
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
     soup = BeautifulSoup(html, "html.parser")
     events: list[dict[str, Any]] = []
     current_date: date | None = None
@@ -345,6 +501,7 @@ def parse_events(html: str, start: date, end: date, updated_at: str) -> list[dic
     raw_candidate_count = 0
     importance_pass_count = 0
     usd_pass_count = 0
+    datetime_examples: list[tuple[str, str]] = []
 
     try:
         rows = soup.select("tr")
@@ -367,7 +524,7 @@ def parse_events(html: str, start: date, end: date, updated_at: str) -> list[dic
         currency = row_currency(row)
         if (not currency or currency.upper() == "USD") and row_country_is_us(row):
             usd_pass_count += 1
-        event = extract_event(row, current_date, start, end, updated_at)
+        event = extract_event(row, current_date, start, end, updated_at, candidate.timezone, datetime_examples)
         if event:
             events.append(event)
 
@@ -383,15 +540,36 @@ def parse_events(html: str, start: date, end: date, updated_at: str) -> list[dic
         cleaned.append(event)
 
     logging.info(
-        "Parsing stats for %s to %s: html_rows=%d raw_event_candidates=%d importance_3_pass=%d usd_filter_pass=%d final_events=%d",
+        "Parsing stats for %s to %s using %s: html_rows=%d raw_event_candidates=%d importance_3_pass=%d usd_filter_pass=%d final_events=%d",
         start,
         end,
+        candidate.name,
         html_row_count,
         raw_candidate_count,
         importance_pass_count,
         usd_pass_count,
         len(cleaned),
     )
+    if datetime_examples:
+        raw_example, kst_example = datetime_examples[0]
+        logging.info(
+            "Datetime conversion example for %s to %s using %s timezone=%s: raw=%r converted_kst=%r",
+            start,
+            end,
+            candidate.name,
+            candidate.timezone,
+            raw_example,
+            kst_example,
+        )
+
+    stats = {
+        "html_row_count": html_row_count,
+        "raw_candidate_count": raw_candidate_count,
+        "importance_pass_count": importance_pass_count,
+        "usd_pass_count": usd_pass_count,
+        "final_events_count": len(cleaned),
+    }
+
     if html_row_count == 0:
         raise RuntimeError("HTML parsing found zero table rows")
     if raw_candidate_count == 0:
@@ -405,7 +583,7 @@ def parse_events(html: str, start: date, end: date, updated_at: str) -> list[dic
             importance_pass_count,
             usd_pass_count,
         )
-    return cleaned
+    return cleaned, stats
 
 
 def iter_request_ranges(start: date, end: date) -> list[tuple[date, date]]:
@@ -425,8 +603,8 @@ def fetch_events(start: date, end: date, updated_at: str) -> list[dict[str, Any]
     session.headers.update(HEADERS)
     for chunk_start, chunk_end in iter_request_ranges(start, end):
         logging.info("Requesting Investing.com chunk from %s to %s", chunk_start, chunk_end)
-        html = fetch_calendar_html(session, chunk_start, chunk_end)
-        events.extend(parse_events(html, chunk_start, chunk_end, updated_at))
+        result = fetch_calendar_chunk(session, chunk_start, chunk_end, updated_at)
+        events.extend(result.events)
 
     events.sort(key=lambda item: (item["date"], item["time"], item["raw_name"]))
     deduped: list[dict[str, Any]] = []
@@ -446,9 +624,8 @@ def build_payload(status: str, updated_at: str | None, events: list[dict[str, An
         "updated_at": updated_at,
         "source": "investing",
         "events": events,
+        "error": error,
     }
-    if error:
-        payload["error"] = error
     return payload
 
 
@@ -482,7 +659,13 @@ def preserve_existing_or_write_failure(reason: str, updated_at: str) -> None:
     logging.error("Economic calendar fetch failed: %s", reason)
     existing = load_existing_payload()
     if has_existing_successful_events(existing):
-        logging.info("Keeping existing successful JSON file with events: %s", OUTPUT_PATH)
+        existing_events = existing if isinstance(existing, list) else existing.get("events", [])
+        existing_updated_at = existing[0].get("updated_at") if isinstance(existing, list) and existing else existing.get("updated_at")
+        logging.warning(
+            "Writing fetch_failed status while preserving %d existing events from last successful JSON",
+            len(existing_events),
+        )
+        write_json(build_payload("fetch_failed", existing_updated_at or updated_at, existing_events, error=reason[:500]))
         return
     logging.warning("Writing fetch_failed status JSON to %s", OUTPUT_PATH)
     write_json(build_payload("fetch_failed", updated_at, [], error=reason[:500]))

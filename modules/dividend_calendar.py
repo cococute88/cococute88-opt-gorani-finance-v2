@@ -301,9 +301,12 @@ def render_us_economic_calendar_section() -> None:
         _render_economic_calendar_debug(debug_info)
         return
     if status == "fetch_failed":
-        st.warning("경제 일정 자동 수집에 실패했습니다. GitHub Actions 로그를 확인해 주세요.")
-        _render_economic_calendar_debug(debug_info)
-        return
+        if events:
+            st.warning("경제 일정 자동 수집에 실패했습니다. 마지막 정상 데이터를 표시합니다.")
+        else:
+            st.warning("경제 일정 자동 수집에 실패했습니다. GitHub Actions 로그를 확인해 주세요.")
+            _render_economic_calendar_debug(debug_info)
+            return
     if status == "empty":
         st.info("수집은 성공했지만 향후 30일 내 표시할 중요 일정이 없습니다.")
         _render_economic_calendar_debug(debug_info)
