@@ -1,0 +1,42 @@
+name: Update Economic Calendar
+
+on:
+  workflow_dispatch:
+  schedule:
+    # GitHub Actions cron uses UTC. 22:00 UTC is 07:00 KST.
+    - cron: "0 22 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-economic-calendar
+  cancel-in-progress: false
+
+jobs:
+  update-economic-calendar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Fetch Investing.com economic calendar
+        run: python scripts/fetch_investing_economic_calendar.py
+
+      - name: Commit updated economic calendar
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "Update U.S. economic calendar data"
+          file_pattern: data/economic_calendar_us_high.json
