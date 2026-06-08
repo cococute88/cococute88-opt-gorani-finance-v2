@@ -6,7 +6,6 @@ File: modules/dividend_calendar.py
 
 from __future__ import annotations
 
-import html
 import json
 import os
 import re
@@ -245,11 +244,17 @@ def load_us_high_importance_economic_calendar() -> Tuple[List[Dict[str, Any]], O
                 continue
         except Exception:
             pass
+        sort_date = raw_date
+        try:
+            sort_date = pd.Timestamp(raw_date).date().isoformat()
+        except Exception:
+            pass
         event = {
             "date": _format_economic_event_date(item.get("date")),
             "time": _format_calendar_value(item.get("time")),
             "name": _format_calendar_value(item.get("name") or item.get("raw_name")),
             "updated_at": item.get("updated_at"),
+            "_sort_date": sort_date,
         }
         events.append(event)
         if item.get("updated_at"):
@@ -258,6 +263,14 @@ def load_us_high_importance_economic_calendar() -> Tuple[List[Dict[str, Any]], O
     if not raw_updated_at and latest_event_updated_at:
         updated_at = _format_economic_updated_at(latest_event_updated_at)
         is_stale = _is_economic_data_stale(latest_event_updated_at)
+
+    events.sort(
+        key=lambda event: (
+            str(event.get("_sort_date") or ""),
+            str(event.get("time") or ""),
+            str(event.get("name") or ""),
+        )
+    )
 
     debug_info = _build_economic_debug_info(
         payload_type=payload_type,
@@ -323,41 +336,16 @@ def render_us_economic_calendar_section() -> None:
         _render_economic_calendar_debug(debug_info)
         return
 
-    st.markdown(
-        """
-        <style>
-        .econ-card-list { display:flex; flex-direction:column; gap:8px; margin-top:10px; }
-        .econ-card { padding:10px 12px; border:1px solid rgba(148,163,184,.22); border-radius:12px; background:rgba(15,23,42,.04); }
-        .econ-card-header { display:flex; gap:9px; align-items:flex-start; font-size:15px; line-height:1.35; font-weight:700; }
-        .econ-card-time { flex:0 0 auto; color:#2563eb; white-space:nowrap; font-variant-numeric:tabular-nums; }
-        .econ-card-name { min-width:0; overflow-wrap:anywhere; }
-        .econ-updated-at { margin-top:8px; color:rgba(100,116,139,.85); font-size:12px; }
-        .econ-stale-warning { margin-top:8px; color:#b45309; font-size:12px; }
-        @media (max-width: 480px) { .econ-card-header { font-size:14px; gap:7px; } }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    cards = ['<div class="econ-card-list">']
     for event in events:
-        name = html.escape(event["name"])
-        cards.append(
-            f"""
-            <div class="econ-card">
-                <div class="econ-card-header">
-                    <span class="econ-card-time">{html.escape(event['date'])} {html.escape(event['time'])}</span>
-                    <span class="econ-card-name">{name}</span>
-                </div>
-            </div>
-            """
-        )
-    cards.append("</div>")
+        date_text = _format_calendar_value(event.get("date"))
+        time_text = _format_calendar_value(event.get("time"))
+        name = _format_calendar_value(event.get("name"))
+        st.markdown(f"**{date_text} {time_text}** {name}")
+
     if updated_at:
-        cards.append(f'<div class="econ-updated-at">마지막 업데이트: {html.escape(updated_at)}</div>')
+        st.caption(f"마지막 업데이트: {updated_at}")
     if is_stale:
-        cards.append('<div class="econ-stale-warning">⚠️ 경제 일정 데이터가 48시간 이상 업데이트되지 않았습니다.</div>')
-    st.markdown("\n".join(cards), unsafe_allow_html=True)
+        st.caption("⚠️ 경제 일정 데이터가 48시간 이상 업데이트되지 않았습니다.")
     _render_economic_calendar_debug(debug_info)
 
 # ---------------------------------------------------------------------------
