@@ -6,7 +6,6 @@ File: modules/dividend_calendar.py
 
 from __future__ import annotations
 
-import html
 import json
 import os
 import re
@@ -102,48 +101,14 @@ def _format_calendar_value(value: Any) -> str:
     return text if text else "-"
 
 
-def _parse_economic_event_date(date_value: Any) -> Optional[pd.Timestamp]:
-    raw = "" if date_value is None else str(date_value).strip()
-    if not raw:
-        return None
-
-    normalized = raw.replace(".", "/").replace("-", "/")
-    current_year = pd.Timestamp.now(tz="Asia/Seoul").year
-    date_candidates = [raw]
-    if re.fullmatch(r"\d{1,2}/\d{1,2}", normalized):
-        date_candidates.insert(0, f"{current_year}/{normalized}")
-
-    for candidate in date_candidates:
-        try:
-            return pd.Timestamp(candidate)
-        except Exception:
-            continue
-    return None
-
-
 def _format_economic_event_date(date_value: Any) -> str:
     raw = "" if date_value is None else str(date_value).strip()
     if not raw:
         return "--/--"
-
-    parsed = _parse_economic_event_date(raw)
-    if parsed is not None:
-        weekdays = ["월", "화", "수", "목", "금", "토", "일"]
-        return f"{parsed.month}/{parsed.day}({weekdays[parsed.weekday()]})"
-
-    if len(raw) >= 10 and re.fullmatch(r"\d{4}-\d{1,2}-\d{1,2}.*", raw):
-        return raw[5:10].replace("-", "/")
-    return raw
-
-
-def _sort_key_economic_time(time_value: Any) -> str:
-    text = _format_calendar_value(time_value)
-    if text == "-":
-        return "99:99"
-    match = re.search(r"(\d{1,2})[:：](\d{2})", text)
-    if match:
-        return f"{int(match.group(1)):02d}:{match.group(2)}"
-    return text
+    try:
+        return pd.Timestamp(raw).strftime("%m/%d")
+    except Exception:
+        return raw[5:].replace("-", "/") if len(raw) >= 10 else raw
 
 
 def _parse_economic_updated_at(updated_at: Any) -> Optional[pd.Timestamp]:
@@ -227,7 +192,7 @@ def _build_economic_debug_info(
     }
 
 
-@st.cache_data(ttl=60 * 5, show_spinner=False)
+@st.cache_data(ttl=60 * 30, show_spinner=False)
 def load_us_high_importance_economic_calendar() -> Tuple[List[Dict[str, Any]], Optional[str], Optional[str], bool, Dict[str, Any]]:
     """Load pre-generated U.S. high-importance economic calendar JSON without network calls.
 
@@ -268,7 +233,7 @@ def load_us_high_importance_economic_calendar() -> Tuple[List[Dict[str, Any]], O
 
     events: List[Dict[str, Any]] = []
     latest_event_updated_at: Optional[str] = None
-    for original_index, item in enumerate(events_payload):
+    for item in events_payload:
         if not isinstance(item, dict):
             continue
         raw_date = "" if item.get("date") is None else str(item.get("date")).strip()
@@ -279,15 +244,17 @@ def load_us_high_importance_economic_calendar() -> Tuple[List[Dict[str, Any]], O
                 continue
         except Exception:
             pass
-        parsed_sort_date = _parse_economic_event_date(raw_date)
-        sort_date = parsed_sort_date.date().isoformat() if parsed_sort_date is not None else raw_date
+        sort_date = raw_date
+        try:
+            sort_date = pd.Timestamp(raw_date).date().isoformat()
+        except Exception:
+            pass
         event = {
             "date": _format_economic_event_date(item.get("date")),
             "time": _format_calendar_value(item.get("time")),
             "name": _format_calendar_value(item.get("name") or item.get("raw_name")),
             "updated_at": item.get("updated_at"),
             "_sort_date": sort_date,
-            "_original_index": original_index,
         }
         events.append(event)
         if item.get("updated_at"):
@@ -300,8 +267,8 @@ def load_us_high_importance_economic_calendar() -> Tuple[List[Dict[str, Any]], O
     events.sort(
         key=lambda event: (
             str(event.get("_sort_date") or ""),
-            _sort_key_economic_time(event.get("time")),
-            int(event.get("_original_index", 0)),
+            str(event.get("time") or ""),
+            str(event.get("name") or ""),
         )
     )
 
@@ -316,95 +283,8 @@ def load_us_high_importance_economic_calendar() -> Tuple[List[Dict[str, Any]], O
     return events, None, updated_at, is_stale, debug_info
 
 
-
-def _render_economic_events_grouped(events: List[Dict[str, Any]]) -> None:
-    css = """
-    <style>
-    .econ-day-group {
-      margin-top: 14px;
-    }
-    .econ-day-title {
-      font-weight: 800;
-      font-size: 15px;
-      margin: 10px 0 6px 0;
-      color: var(--text-color);
-    }
-    .econ-table {
-      border: 1px solid rgba(128,128,128,0.18);
-      border-radius: 12px;
-      overflow: hidden;
-      background: rgba(128,128,128,0.03);
-    }
-    .econ-row {
-      display: grid;
-      grid-template-columns: 62px 1fr;
-      gap: 8px;
-      padding: 9px 10px;
-      border-bottom: 1px solid rgba(128,128,128,0.12);
-      align-items: start;
-    }
-    .econ-row:last-child {
-      border-bottom: none;
-    }
-    .econ-time {
-      font-weight: 800;
-      color: #2563eb;
-      white-space: nowrap;
-      font-variant-numeric: tabular-nums;
-    }
-    .econ-name {
-      font-weight: 600;
-      line-height: 1.35;
-      word-break: keep-all;
-      overflow-wrap: anywhere;
-    }
-    .econ-updated-at {
-      margin-top: 12px;
-      color: rgba(100,116,139,.9);
-      font-size: 12px;
-    }
-    </style>
-    """
-
-    grouped_html: List[str] = [css]
-    current_date: Optional[str] = None
-    for event in events:
-        date_text = _format_calendar_value(event.get("date"))
-        if date_text != current_date:
-            if current_date is not None:
-                grouped_html.append("</div></div>")
-            current_date = date_text
-            grouped_html.append(
-                '<div class="econ-day-group">'
-                f'<div class="econ-day-title">{html.escape(date_text)}</div>'
-                '<div class="econ-table">'
-            )
-
-        time_text = _format_calendar_value(event.get("time"))
-        name = _format_calendar_value(event.get("name"))
-        grouped_html.append(
-            '<div class="econ-row">'
-            f'<div class="econ-time">{html.escape(time_text)}</div>'
-            f'<div class="econ-name">{html.escape(name)}</div>'
-            '</div>'
-        )
-
-    if current_date is not None:
-        grouped_html.append("</div></div>")
-
-    st.markdown("".join(grouped_html), unsafe_allow_html=True)
-
-
-def _render_economic_updated_at(updated_at: Optional[str]) -> None:
-    if not updated_at:
-        return
-    st.markdown(
-        f'<div class="econ-updated-at">마지막 업데이트: {html.escape(updated_at)}</div>',
-        unsafe_allow_html=True,
-    )
-
 def _render_economic_calendar_debug(debug_info: Dict[str, Any]) -> None:
-    with st.expander("경제 일정 데이터 상태", expanded=False):
+    with st.expander("경제 일정 데이터 상태"):
         st.write(f"JSON status: {debug_info.get('status')}")
         st.write(f"updated_at: {debug_info.get('updated_at') or '-'}")
         st.write(f"events count: {debug_info.get('events_count', 0)}")
@@ -418,32 +298,14 @@ def _render_economic_calendar_debug(debug_info: Dict[str, Any]) -> None:
 def render_us_economic_calendar_section() -> None:
     """Render the GitHub Actions-generated U.S. economic calendar section."""
     st.divider()
-
-    title_col, refresh_col = st.columns([1, 0.28], vertical_alignment="center")
-    with title_col:
-        st.markdown("### 📅 주요 미국 경제 일정")
-    with refresh_col:
-        refresh_clicked = st.button("🔄 새로고침", key="refresh_economic_calendar_json", use_container_width=True)
-
-    if st.session_state.pop("economic_calendar_refreshed", False):
-        st.toast("경제 일정 데이터를 다시 불러왔습니다.")
-
-    if refresh_clicked:
-        load_us_high_importance_economic_calendar.clear()
-        st.session_state["economic_calendar_refreshed"] = True
-        st.rerun()
-
+    st.markdown("### 📅 주요 미국 경제 일정")
     st.caption("향후 30일 내 중요도 높은 미국 경제지표 일정입니다.")
 
     events, error, updated_at, is_stale, debug_info = load_us_high_importance_economic_calendar()
     status = debug_info.get("status") or "ok"
 
-    if error == "invalid_file" or status == "invalid_file":
+    if error == "invalid_file":
         st.warning("경제 일정 데이터 파일을 읽을 수 없습니다.")
-        _render_economic_calendar_debug(debug_info)
-        return
-    if status == "missing_file":
-        st.warning("경제 일정 데이터 파일을 찾을 수 없습니다.")
         _render_economic_calendar_debug(debug_info)
         return
 
@@ -474,8 +336,14 @@ def render_us_economic_calendar_section() -> None:
         _render_economic_calendar_debug(debug_info)
         return
 
-    _render_economic_events_grouped(events)
-    _render_economic_updated_at(updated_at)
+    for event in events:
+        date_text = _format_calendar_value(event.get("date"))
+        time_text = _format_calendar_value(event.get("time"))
+        name = _format_calendar_value(event.get("name"))
+        st.markdown(f"**{date_text} {time_text}** {name}")
+
+    if updated_at:
+        st.caption(f"마지막 업데이트: {updated_at}")
     if is_stale:
         st.caption("⚠️ 경제 일정 데이터가 48시간 이상 업데이트되지 않았습니다.")
     _render_economic_calendar_debug(debug_info)
