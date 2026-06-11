@@ -1,96 +1,8 @@
 {
   "status": "ok",
-  "updated_at": "2026-06-09T08:06:28+09:00",
+  "updated_at": "2026-06-12T08:13:16+09:00",
   "source": "investing",
   "events": [
-    {
-      "date": "2026-06-09",
-      "time": "23:00",
-      "name": "기존주택판매",
-      "raw_name": "Existing Home Sales",
-      "currency": "USD",
-      "country": "United States",
-      "importance": 3,
-      "source": "investing",
-      "updated_at": "2026-06-09T08:06:28+09:00"
-    },
-    {
-      "date": "2026-06-10",
-      "time": "21:30",
-      "name": "소비자물가지수 (MoM)",
-      "raw_name": "CPI (MoM)",
-      "currency": "USD",
-      "country": "United States",
-      "importance": 3,
-      "source": "investing",
-      "updated_at": "2026-06-09T08:06:28+09:00"
-    },
-    {
-      "date": "2026-06-10",
-      "time": "21:30",
-      "name": "소비자물가지수 (YoY)",
-      "raw_name": "CPI (YoY)",
-      "currency": "USD",
-      "country": "United States",
-      "importance": 3,
-      "source": "investing",
-      "updated_at": "2026-06-09T08:06:28+09:00"
-    },
-    {
-      "date": "2026-06-10",
-      "time": "21:30",
-      "name": "근원 소비자물가지수 (MoM)",
-      "raw_name": "Core CPI (MoM)",
-      "currency": "USD",
-      "country": "United States",
-      "importance": 3,
-      "source": "investing",
-      "updated_at": "2026-06-09T08:06:28+09:00"
-    },
-    {
-      "date": "2026-06-10",
-      "time": "23:30",
-      "name": "원유재고",
-      "raw_name": "Crude Oil Inventories",
-      "currency": "USD",
-      "country": "United States",
-      "importance": 3,
-      "source": "investing",
-      "updated_at": "2026-06-09T08:06:28+09:00"
-    },
-    {
-      "date": "2026-06-11",
-      "time": "02:00",
-      "name": "10-Year Note Auction",
-      "raw_name": "10-Year Note Auction",
-      "currency": "USD",
-      "country": "United States",
-      "importance": 3,
-      "source": "investing",
-      "updated_at": "2026-06-09T08:06:28+09:00"
-    },
-    {
-      "date": "2026-06-11",
-      "time": "21:30",
-      "name": "신규 실업수당청구건수",
-      "raw_name": "Initial Jobless Claims",
-      "currency": "USD",
-      "country": "United States",
-      "importance": 3,
-      "source": "investing",
-      "updated_at": "2026-06-09T08:06:28+09:00"
-    },
-    {
-      "date": "2026-06-11",
-      "time": "21:30",
-      "name": "생산자물가지수 (MoM)",
-      "raw_name": "PPI (MoM)",
-      "currency": "USD",
-      "country": "United States",
-      "importance": 3,
-      "source": "investing",
-      "updated_at": "2026-06-09T08:06:28+09:00"
-    },
     {
       "date": "2026-06-17",
       "time": "21:30",
@@ -100,7 +12,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-09T08:06:28+09:00"
+      "updated_at": "2026-06-12T08:13:16+09:00"
     },
     {
       "date": "2026-06-17",
@@ -111,7 +23,29 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-09T08:06:28+09:00"
+      "updated_at": "2026-06-12T08:13:16+09:00"
+    },
+    {
+      "date": "2026-06-17",
+      "time": "23:30",
+      "name": "원유재고",
+      "raw_name": "Crude Oil Inventories",
+      "currency": "USD",
+      "country": "United States",
+      "importance": 3,
+      "source": "investing",
+      "updated_at": "2026-06-12T08:13:16+09:00"
+    },
+    {
+      "date": "2026-06-18",
+      "time": "03:00",
+      "name": "금리결정 Statement",
+      "raw_name": "FOMC Statement",
+      "currency": "USD",
+      "country": "United States",
+      "importance": 3,
+      "source": "investing",
+      "updated_at": "2026-06-12T08:13:16+09:00"
     },
     {
       "date": "2026-06-18",
@@ -122,7 +56,29 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-09T08:06:28+09:00"
+      "updated_at": "2026-06-12T08:13:16+09:00"
+    },
+    {
+      "date": "2026-06-18",
+      "time": "03:30",
+      "name": "금리결정 Press Conference",
+      "raw_name": "FOMC Press Conference",
+      "currency": "USD",
+      "country": "United States",
+      "importance": 3,
+      "source": "investing",
+      "updated_at": "2026-06-12T08:13:16+09:00"
+    },
+    {
+      "date": "2026-06-18",
+      "time": "21:30",
+      "name": "신규 실업수당청구건수",
+      "raw_name": "Initial Jobless Claims",
+      "currency": "USD",
+      "country": "United States",
+      "importance": 3,
+      "source": "investing",
+      "updated_at": "2026-06-12T08:13:16+09:00"
     },
     {
       "date": "2026-06-18",
@@ -133,7 +89,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-09T08:06:28+09:00"
+      "updated_at": "2026-06-12T08:13:16+09:00"
     },
     {
       "date": "2026-06-23",
@@ -144,7 +100,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-09T08:06:28+09:00"
+      "updated_at": "2026-06-12T08:13:16+09:00"
     },
     {
       "date": "2026-06-23",
@@ -155,7 +111,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-09T08:06:28+09:00"
+      "updated_at": "2026-06-12T08:13:16+09:00"
     },
     {
       "date": "2026-06-24",
@@ -166,7 +122,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-09T08:06:28+09:00"
+      "updated_at": "2026-06-12T08:13:16+09:00"
     },
     {
       "date": "2026-06-25",
@@ -177,7 +133,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-09T08:06:28+09:00"
+      "updated_at": "2026-06-12T08:13:16+09:00"
     },
     {
       "date": "2026-06-25",
@@ -188,7 +144,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-09T08:06:28+09:00"
+      "updated_at": "2026-06-12T08:13:16+09:00"
     },
     {
       "date": "2026-06-25",
@@ -199,7 +155,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-09T08:06:28+09:00"
+      "updated_at": "2026-06-12T08:13:16+09:00"
     },
     {
       "date": "2026-06-25",
@@ -210,7 +166,117 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-09T08:06:28+09:00"
+      "updated_at": "2026-06-12T08:13:16+09:00"
+    },
+    {
+      "date": "2026-06-30",
+      "time": "22:45",
+      "name": "Chicago PMI",
+      "raw_name": "Chicago PMI",
+      "currency": "USD",
+      "country": "United States",
+      "importance": 3,
+      "source": "investing",
+      "updated_at": "2026-06-12T08:13:16+09:00"
+    },
+    {
+      "date": "2026-06-30",
+      "time": "23:00",
+      "name": "CB Consumer Confidence",
+      "raw_name": "CB Consumer Confidence",
+      "currency": "USD",
+      "country": "United States",
+      "importance": 3,
+      "source": "investing",
+      "updated_at": "2026-06-12T08:13:16+09:00"
+    },
+    {
+      "date": "2026-06-30",
+      "time": "23:00",
+      "name": "JOLTS Job Openings",
+      "raw_name": "JOLTS Job Openings",
+      "currency": "USD",
+      "country": "United States",
+      "importance": 3,
+      "source": "investing",
+      "updated_at": "2026-06-12T08:13:16+09:00"
+    },
+    {
+      "date": "2026-07-01",
+      "time": "21:15",
+      "name": "ADP Nonfarm Employment Change",
+      "raw_name": "ADP Nonfarm Employment Change",
+      "currency": "USD",
+      "country": "United States",
+      "importance": 3,
+      "source": "investing",
+      "updated_at": "2026-06-12T08:13:16+09:00"
+    },
+    {
+      "date": "2026-07-01",
+      "time": "22:45",
+      "name": "S&P Global Manufacturing PMI",
+      "raw_name": "S&P Global Manufacturing PMI",
+      "currency": "USD",
+      "country": "United States",
+      "importance": 3,
+      "source": "investing",
+      "updated_at": "2026-06-12T08:13:16+09:00"
+    },
+    {
+      "date": "2026-07-01",
+      "time": "23:00",
+      "name": "ISM Manufacturing PMI",
+      "raw_name": "ISM Manufacturing PMI",
+      "currency": "USD",
+      "country": "United States",
+      "importance": 3,
+      "source": "investing",
+      "updated_at": "2026-06-12T08:13:16+09:00"
+    },
+    {
+      "date": "2026-07-01",
+      "time": "23:00",
+      "name": "ISM Manufacturing Prices",
+      "raw_name": "ISM Manufacturing Prices",
+      "currency": "USD",
+      "country": "United States",
+      "importance": 3,
+      "source": "investing",
+      "updated_at": "2026-06-12T08:13:16+09:00"
+    },
+    {
+      "date": "2026-07-02",
+      "time": "21:30",
+      "name": "Average Hourly Earnings (MoM)",
+      "raw_name": "Average Hourly Earnings (MoM)",
+      "currency": "USD",
+      "country": "United States",
+      "importance": 3,
+      "source": "investing",
+      "updated_at": "2026-06-12T08:13:16+09:00"
+    },
+    {
+      "date": "2026-07-02",
+      "time": "21:30",
+      "name": "비농업고용지수",
+      "raw_name": "Nonfarm Payrolls",
+      "currency": "USD",
+      "country": "United States",
+      "importance": 3,
+      "source": "investing",
+      "updated_at": "2026-06-12T08:13:16+09:00"
+    },
+    {
+      "date": "2026-07-02",
+      "time": "21:30",
+      "name": "실업률",
+      "raw_name": "Unemployment Rate",
+      "currency": "USD",
+      "country": "United States",
+      "importance": 3,
+      "source": "investing",
+      "updated_at": "2026-06-12T08:13:16+09:00"
     }
   ],
   "error": null
