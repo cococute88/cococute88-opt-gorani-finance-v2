@@ -1,6 +1,6 @@
 {
   "status": "ok",
-  "updated_at": "2026-06-12T08:13:16+09:00",
+  "updated_at": "2026-06-17T08:16:54+09:00",
   "source": "investing",
   "events": [
     {
@@ -12,7 +12,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-12T08:13:16+09:00"
+      "updated_at": "2026-06-17T08:16:54+09:00"
     },
     {
       "date": "2026-06-17",
@@ -23,7 +23,18 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-12T08:13:16+09:00"
+      "updated_at": "2026-06-17T08:16:54+09:00"
+    },
+    {
+      "date": "2026-06-17",
+      "time": "22:30",
+      "name": "U.S. President Trump Speaks",
+      "raw_name": "U.S. President Trump Speaks",
+      "currency": "USD",
+      "country": "United States",
+      "importance": 3,
+      "source": "investing",
+      "updated_at": "2026-06-17T08:16:54+09:00"
     },
     {
       "date": "2026-06-17",
@@ -34,7 +45,18 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-12T08:13:16+09:00"
+      "updated_at": "2026-06-17T08:16:54+09:00"
+    },
+    {
+      "date": "2026-06-18",
+      "time": "03:00",
+      "name": "금리결정 Economic Projections",
+      "raw_name": "FOMC Economic Projections",
+      "currency": "USD",
+      "country": "United States",
+      "importance": 3,
+      "source": "investing",
+      "updated_at": "2026-06-17T08:16:54+09:00"
     },
     {
       "date": "2026-06-18",
@@ -45,7 +67,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-12T08:13:16+09:00"
+      "updated_at": "2026-06-17T08:16:54+09:00"
     },
     {
       "date": "2026-06-18",
@@ -56,7 +78,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-12T08:13:16+09:00"
+      "updated_at": "2026-06-17T08:16:54+09:00"
     },
     {
       "date": "2026-06-18",
@@ -67,7 +89,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-12T08:13:16+09:00"
+      "updated_at": "2026-06-17T08:16:54+09:00"
     },
     {
       "date": "2026-06-18",
@@ -78,7 +100,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-12T08:13:16+09:00"
+      "updated_at": "2026-06-17T08:16:54+09:00"
     },
     {
       "date": "2026-06-18",
@@ -89,7 +111,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-12T08:13:16+09:00"
+      "updated_at": "2026-06-17T08:16:54+09:00"
     },
     {
       "date": "2026-06-23",
@@ -100,7 +122,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-12T08:13:16+09:00"
+      "updated_at": "2026-06-17T08:16:54+09:00"
     },
     {
       "date": "2026-06-23",
@@ -111,7 +133,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-12T08:13:16+09:00"
+      "updated_at": "2026-06-17T08:16:54+09:00"
     },
     {
       "date": "2026-06-24",
@@ -122,7 +144,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-12T08:13:16+09:00"
+      "updated_at": "2026-06-17T08:16:54+09:00"
     },
     {
       "date": "2026-06-25",
@@ -133,7 +155,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-12T08:13:16+09:00"
+      "updated_at": "2026-06-17T08:16:54+09:00"
     },
     {
       "date": "2026-06-25",
@@ -144,7 +166,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-12T08:13:16+09:00"
+      "updated_at": "2026-06-17T08:16:54+09:00"
     },
     {
       "date": "2026-06-25",
@@ -155,7 +177,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-12T08:13:16+09:00"
+      "updated_at": "2026-06-17T08:16:54+09:00"
     },
     {
       "date": "2026-06-25",
@@ -166,7 +188,18 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-12T08:13:16+09:00"
+      "updated_at": "2026-06-17T08:16:54+09:00"
+    },
+    {
+      "date": "2026-06-25",
+      "time": "21:30",
+      "name": "신규 실업수당청구건수",
+      "raw_name": "Initial Jobless Claims",
+      "currency": "USD",
+      "country": "United States",
+      "importance": 3,
+      "source": "investing",
+      "updated_at": "2026-06-17T08:16:54+09:00"
     },
     {
       "date": "2026-06-30",
@@ -177,7 +210,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-12T08:13:16+09:00"
+      "updated_at": "2026-06-17T08:16:54+09:00"
     },
     {
       "date": "2026-06-30",
@@ -188,7 +221,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-12T08:13:16+09:00"
+      "updated_at": "2026-06-17T08:16:54+09:00"
     },
     {
       "date": "2026-06-30",
@@ -199,7 +232,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-12T08:13:16+09:00"
+      "updated_at": "2026-06-17T08:16:54+09:00"
     },
     {
       "date": "2026-07-01",
@@ -210,7 +243,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-12T08:13:16+09:00"
+      "updated_at": "2026-06-17T08:16:54+09:00"
     },
     {
       "date": "2026-07-01",
@@ -221,7 +254,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-12T08:13:16+09:00"
+      "updated_at": "2026-06-17T08:16:54+09:00"
     },
     {
       "date": "2026-07-01",
@@ -232,7 +265,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-12T08:13:16+09:00"
+      "updated_at": "2026-06-17T08:16:54+09:00"
     },
     {
       "date": "2026-07-01",
@@ -243,7 +276,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-12T08:13:16+09:00"
+      "updated_at": "2026-06-17T08:16:54+09:00"
     },
     {
       "date": "2026-07-02",
@@ -254,7 +287,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-12T08:13:16+09:00"
+      "updated_at": "2026-06-17T08:16:54+09:00"
     },
     {
       "date": "2026-07-02",
@@ -265,7 +298,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-12T08:13:16+09:00"
+      "updated_at": "2026-06-17T08:16:54+09:00"
     },
     {
       "date": "2026-07-02",
@@ -276,7 +309,40 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-12T08:13:16+09:00"
+      "updated_at": "2026-06-17T08:16:54+09:00"
+    },
+    {
+      "date": "2026-07-06",
+      "time": "22:45",
+      "name": "S&P Global Services PMI",
+      "raw_name": "S&P Global Services PMI",
+      "currency": "USD",
+      "country": "United States",
+      "importance": 3,
+      "source": "investing",
+      "updated_at": "2026-06-17T08:16:54+09:00"
+    },
+    {
+      "date": "2026-07-06",
+      "time": "23:00",
+      "name": "ISM Non-Manufacturing PMI",
+      "raw_name": "ISM Non-Manufacturing PMI",
+      "currency": "USD",
+      "country": "United States",
+      "importance": 3,
+      "source": "investing",
+      "updated_at": "2026-06-17T08:16:54+09:00"
+    },
+    {
+      "date": "2026-07-06",
+      "time": "23:00",
+      "name": "ISM Non-Manufacturing Prices",
+      "raw_name": "ISM Non-Manufacturing Prices",
+      "currency": "USD",
+      "country": "United States",
+      "importance": 3,
+      "source": "investing",
+      "updated_at": "2026-06-17T08:16:54+09:00"
     }
   ],
   "error": null
