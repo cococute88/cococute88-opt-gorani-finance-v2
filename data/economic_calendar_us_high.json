@@ -1,118 +1,8 @@
 {
   "status": "ok",
-  "updated_at": "2026-06-17T08:16:54+09:00",
+  "updated_at": "2026-06-20T07:42:29+09:00",
   "source": "investing",
   "events": [
-    {
-      "date": "2026-06-17",
-      "time": "21:30",
-      "name": "근원 소매판매 (MoM)",
-      "raw_name": "Core Retail Sales (MoM)",
-      "currency": "USD",
-      "country": "United States",
-      "importance": 3,
-      "source": "investing",
-      "updated_at": "2026-06-17T08:16:54+09:00"
-    },
-    {
-      "date": "2026-06-17",
-      "time": "21:30",
-      "name": "소매판매 (MoM)",
-      "raw_name": "Retail Sales (MoM)",
-      "currency": "USD",
-      "country": "United States",
-      "importance": 3,
-      "source": "investing",
-      "updated_at": "2026-06-17T08:16:54+09:00"
-    },
-    {
-      "date": "2026-06-17",
-      "time": "22:30",
-      "name": "U.S. President Trump Speaks",
-      "raw_name": "U.S. President Trump Speaks",
-      "currency": "USD",
-      "country": "United States",
-      "importance": 3,
-      "source": "investing",
-      "updated_at": "2026-06-17T08:16:54+09:00"
-    },
-    {
-      "date": "2026-06-17",
-      "time": "23:30",
-      "name": "원유재고",
-      "raw_name": "Crude Oil Inventories",
-      "currency": "USD",
-      "country": "United States",
-      "importance": 3,
-      "source": "investing",
-      "updated_at": "2026-06-17T08:16:54+09:00"
-    },
-    {
-      "date": "2026-06-18",
-      "time": "03:00",
-      "name": "금리결정 Economic Projections",
-      "raw_name": "FOMC Economic Projections",
-      "currency": "USD",
-      "country": "United States",
-      "importance": 3,
-      "source": "investing",
-      "updated_at": "2026-06-17T08:16:54+09:00"
-    },
-    {
-      "date": "2026-06-18",
-      "time": "03:00",
-      "name": "금리결정 Statement",
-      "raw_name": "FOMC Statement",
-      "currency": "USD",
-      "country": "United States",
-      "importance": 3,
-      "source": "investing",
-      "updated_at": "2026-06-17T08:16:54+09:00"
-    },
-    {
-      "date": "2026-06-18",
-      "time": "03:00",
-      "name": "금리결정",
-      "raw_name": "Fed Interest Rate Decision",
-      "currency": "USD",
-      "country": "United States",
-      "importance": 3,
-      "source": "investing",
-      "updated_at": "2026-06-17T08:16:54+09:00"
-    },
-    {
-      "date": "2026-06-18",
-      "time": "03:30",
-      "name": "금리결정 Press Conference",
-      "raw_name": "FOMC Press Conference",
-      "currency": "USD",
-      "country": "United States",
-      "importance": 3,
-      "source": "investing",
-      "updated_at": "2026-06-17T08:16:54+09:00"
-    },
-    {
-      "date": "2026-06-18",
-      "time": "21:30",
-      "name": "신규 실업수당청구건수",
-      "raw_name": "Initial Jobless Claims",
-      "currency": "USD",
-      "country": "United States",
-      "importance": 3,
-      "source": "investing",
-      "updated_at": "2026-06-17T08:16:54+09:00"
-    },
-    {
-      "date": "2026-06-18",
-      "time": "21:30",
-      "name": "필라델피아 연은 제조업활동지수",
-      "raw_name": "Philadelphia Fed Manufacturing Index",
-      "currency": "USD",
-      "country": "United States",
-      "importance": 3,
-      "source": "investing",
-      "updated_at": "2026-06-17T08:16:54+09:00"
-    },
     {
       "date": "2026-06-23",
       "time": "22:45",
@@ -122,7 +12,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-17T08:16:54+09:00"
+      "updated_at": "2026-06-20T07:42:29+09:00"
     },
     {
       "date": "2026-06-23",
@@ -133,7 +23,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-17T08:16:54+09:00"
+      "updated_at": "2026-06-20T07:42:29+09:00"
     },
     {
       "date": "2026-06-24",
@@ -144,7 +34,18 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-17T08:16:54+09:00"
+      "updated_at": "2026-06-20T07:42:29+09:00"
+    },
+    {
+      "date": "2026-06-24",
+      "time": "23:30",
+      "name": "원유재고",
+      "raw_name": "Crude Oil Inventories",
+      "currency": "USD",
+      "country": "United States",
+      "importance": 3,
+      "source": "investing",
+      "updated_at": "2026-06-20T07:42:29+09:00"
     },
     {
       "date": "2026-06-25",
@@ -155,7 +56,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-17T08:16:54+09:00"
+      "updated_at": "2026-06-20T07:42:29+09:00"
     },
     {
       "date": "2026-06-25",
@@ -166,7 +67,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-17T08:16:54+09:00"
+      "updated_at": "2026-06-20T07:42:29+09:00"
     },
     {
       "date": "2026-06-25",
@@ -177,7 +78,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-17T08:16:54+09:00"
+      "updated_at": "2026-06-20T07:42:29+09:00"
     },
     {
       "date": "2026-06-25",
@@ -188,7 +89,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-17T08:16:54+09:00"
+      "updated_at": "2026-06-20T07:42:29+09:00"
     },
     {
       "date": "2026-06-25",
@@ -199,7 +100,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-17T08:16:54+09:00"
+      "updated_at": "2026-06-20T07:42:29+09:00"
     },
     {
       "date": "2026-06-30",
@@ -210,7 +111,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-17T08:16:54+09:00"
+      "updated_at": "2026-06-20T07:42:29+09:00"
     },
     {
       "date": "2026-06-30",
@@ -221,7 +122,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-17T08:16:54+09:00"
+      "updated_at": "2026-06-20T07:42:29+09:00"
     },
     {
       "date": "2026-06-30",
@@ -232,7 +133,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-17T08:16:54+09:00"
+      "updated_at": "2026-06-20T07:42:29+09:00"
     },
     {
       "date": "2026-07-01",
@@ -243,7 +144,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-17T08:16:54+09:00"
+      "updated_at": "2026-06-20T07:42:29+09:00"
     },
     {
       "date": "2026-07-01",
@@ -254,7 +155,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-17T08:16:54+09:00"
+      "updated_at": "2026-06-20T07:42:29+09:00"
     },
     {
       "date": "2026-07-01",
@@ -265,7 +166,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-17T08:16:54+09:00"
+      "updated_at": "2026-06-20T07:42:29+09:00"
     },
     {
       "date": "2026-07-01",
@@ -276,7 +177,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-17T08:16:54+09:00"
+      "updated_at": "2026-06-20T07:42:29+09:00"
     },
     {
       "date": "2026-07-02",
@@ -287,7 +188,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-17T08:16:54+09:00"
+      "updated_at": "2026-06-20T07:42:29+09:00"
     },
     {
       "date": "2026-07-02",
@@ -298,7 +199,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-17T08:16:54+09:00"
+      "updated_at": "2026-06-20T07:42:29+09:00"
     },
     {
       "date": "2026-07-02",
@@ -309,7 +210,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-17T08:16:54+09:00"
+      "updated_at": "2026-06-20T07:42:29+09:00"
     },
     {
       "date": "2026-07-06",
@@ -320,7 +221,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-17T08:16:54+09:00"
+      "updated_at": "2026-06-20T07:42:29+09:00"
     },
     {
       "date": "2026-07-06",
@@ -331,7 +232,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-17T08:16:54+09:00"
+      "updated_at": "2026-06-20T07:42:29+09:00"
     },
     {
       "date": "2026-07-06",
@@ -342,7 +243,18 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-17T08:16:54+09:00"
+      "updated_at": "2026-06-20T07:42:29+09:00"
+    },
+    {
+      "date": "2026-07-09",
+      "time": "23:00",
+      "name": "기존주택판매",
+      "raw_name": "Existing Home Sales",
+      "currency": "USD",
+      "country": "United States",
+      "importance": 3,
+      "source": "investing",
+      "updated_at": "2026-06-20T07:42:29+09:00"
     }
   ],
   "error": null
