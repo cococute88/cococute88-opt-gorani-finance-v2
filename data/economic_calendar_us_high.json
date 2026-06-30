@@ -1,41 +1,8 @@
 {
   "status": "ok",
-  "updated_at": "2026-06-30T07:45:03+09:00",
+  "updated_at": "2026-07-01T08:02:00+09:00",
   "source": "investing",
   "events": [
-    {
-      "date": "2026-06-30",
-      "time": "22:45",
-      "name": "Chicago PMI",
-      "raw_name": "Chicago PMI",
-      "currency": "USD",
-      "country": "United States",
-      "importance": 3,
-      "source": "investing",
-      "updated_at": "2026-06-30T07:45:03+09:00"
-    },
-    {
-      "date": "2026-06-30",
-      "time": "23:00",
-      "name": "CB Consumer Confidence",
-      "raw_name": "CB Consumer Confidence",
-      "currency": "USD",
-      "country": "United States",
-      "importance": 3,
-      "source": "investing",
-      "updated_at": "2026-06-30T07:45:03+09:00"
-    },
-    {
-      "date": "2026-06-30",
-      "time": "23:00",
-      "name": "JOLTS Job Openings",
-      "raw_name": "JOLTS Job Openings",
-      "currency": "USD",
-      "country": "United States",
-      "importance": 3,
-      "source": "investing",
-      "updated_at": "2026-06-30T07:45:03+09:00"
-    },
     {
       "date": "2026-07-01",
       "time": "21:15",
@@ -45,7 +12,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-30T07:45:03+09:00"
+      "updated_at": "2026-07-01T08:02:00+09:00"
     },
     {
       "date": "2026-07-01",
@@ -56,7 +23,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-30T07:45:03+09:00"
+      "updated_at": "2026-07-01T08:02:00+09:00"
     },
     {
       "date": "2026-07-01",
@@ -67,7 +34,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-30T07:45:03+09:00"
+      "updated_at": "2026-07-01T08:02:00+09:00"
     },
     {
       "date": "2026-07-01",
@@ -78,7 +45,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-30T07:45:03+09:00"
+      "updated_at": "2026-07-01T08:02:00+09:00"
     },
     {
       "date": "2026-07-01",
@@ -89,7 +56,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-30T07:45:03+09:00"
+      "updated_at": "2026-07-01T08:02:00+09:00"
     },
     {
       "date": "2026-07-02",
@@ -100,7 +67,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-30T07:45:03+09:00"
+      "updated_at": "2026-07-01T08:02:00+09:00"
     },
     {
       "date": "2026-07-02",
@@ -111,7 +78,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-30T07:45:03+09:00"
+      "updated_at": "2026-07-01T08:02:00+09:00"
     },
     {
       "date": "2026-07-02",
@@ -122,7 +89,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-30T07:45:03+09:00"
+      "updated_at": "2026-07-01T08:02:00+09:00"
     },
     {
       "date": "2026-07-02",
@@ -133,7 +100,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-30T07:45:03+09:00"
+      "updated_at": "2026-07-01T08:02:00+09:00"
     },
     {
       "date": "2026-07-06",
@@ -144,7 +111,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-30T07:45:03+09:00"
+      "updated_at": "2026-07-01T08:02:00+09:00"
     },
     {
       "date": "2026-07-06",
@@ -155,7 +122,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-30T07:45:03+09:00"
+      "updated_at": "2026-07-01T08:02:00+09:00"
     },
     {
       "date": "2026-07-06",
@@ -166,7 +133,18 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-30T07:45:03+09:00"
+      "updated_at": "2026-07-01T08:02:00+09:00"
+    },
+    {
+      "date": "2026-07-09",
+      "time": "21:30",
+      "name": "신규 실업수당청구건수",
+      "raw_name": "Initial Jobless Claims",
+      "currency": "USD",
+      "country": "United States",
+      "importance": 3,
+      "source": "investing",
+      "updated_at": "2026-07-01T08:02:00+09:00"
     },
     {
       "date": "2026-07-09",
@@ -177,7 +155,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-30T07:45:03+09:00"
+      "updated_at": "2026-07-01T08:02:00+09:00"
     },
     {
       "date": "2026-07-14",
@@ -188,7 +166,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-30T07:45:03+09:00"
+      "updated_at": "2026-07-01T08:02:00+09:00"
     },
     {
       "date": "2026-07-14",
@@ -199,7 +177,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-30T07:45:03+09:00"
+      "updated_at": "2026-07-01T08:02:00+09:00"
     },
     {
       "date": "2026-07-14",
@@ -210,7 +188,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-30T07:45:03+09:00"
+      "updated_at": "2026-07-01T08:02:00+09:00"
     },
     {
       "date": "2026-07-15",
@@ -221,7 +199,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-30T07:45:03+09:00"
+      "updated_at": "2026-07-01T08:02:00+09:00"
     },
     {
       "date": "2026-07-16",
@@ -232,7 +210,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-30T07:45:03+09:00"
+      "updated_at": "2026-07-01T08:02:00+09:00"
     },
     {
       "date": "2026-07-16",
@@ -243,7 +221,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-30T07:45:03+09:00"
+      "updated_at": "2026-07-01T08:02:00+09:00"
     },
     {
       "date": "2026-07-16",
@@ -254,7 +232,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-30T07:45:03+09:00"
+      "updated_at": "2026-07-01T08:02:00+09:00"
     },
     {
       "date": "2026-07-30",
@@ -265,7 +243,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-06-30T07:45:03+09:00"
+      "updated_at": "2026-07-01T08:02:00+09:00"
     }
   ],
   "error": null
