@@ -1,62 +1,18 @@
 {
   "status": "ok",
-  "updated_at": "2026-07-01T08:02:00+09:00",
+  "updated_at": "2026-07-02T07:59:54+09:00",
   "source": "investing",
   "events": [
     {
-      "date": "2026-07-01",
-      "time": "21:15",
-      "name": "ADP Nonfarm Employment Change",
-      "raw_name": "ADP Nonfarm Employment Change",
+      "date": "2026-07-02",
+      "time": "04:15",
+      "name": "U.S. President Trump Speaks",
+      "raw_name": "U.S. President Trump Speaks",
       "currency": "USD",
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-07-01T08:02:00+09:00"
-    },
-    {
-      "date": "2026-07-01",
-      "time": "22:45",
-      "name": "S&P Global Manufacturing PMI",
-      "raw_name": "S&P Global Manufacturing PMI",
-      "currency": "USD",
-      "country": "United States",
-      "importance": 3,
-      "source": "investing",
-      "updated_at": "2026-07-01T08:02:00+09:00"
-    },
-    {
-      "date": "2026-07-01",
-      "time": "23:00",
-      "name": "ISM Manufacturing PMI",
-      "raw_name": "ISM Manufacturing PMI",
-      "currency": "USD",
-      "country": "United States",
-      "importance": 3,
-      "source": "investing",
-      "updated_at": "2026-07-01T08:02:00+09:00"
-    },
-    {
-      "date": "2026-07-01",
-      "time": "23:00",
-      "name": "ISM Manufacturing Prices",
-      "raw_name": "ISM Manufacturing Prices",
-      "currency": "USD",
-      "country": "United States",
-      "importance": 3,
-      "source": "investing",
-      "updated_at": "2026-07-01T08:02:00+09:00"
-    },
-    {
-      "date": "2026-07-01",
-      "time": "23:30",
-      "name": "원유재고",
-      "raw_name": "Crude Oil Inventories",
-      "currency": "USD",
-      "country": "United States",
-      "importance": 3,
-      "source": "investing",
-      "updated_at": "2026-07-01T08:02:00+09:00"
+      "updated_at": "2026-07-02T07:59:54+09:00"
     },
     {
       "date": "2026-07-02",
@@ -67,7 +23,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-07-01T08:02:00+09:00"
+      "updated_at": "2026-07-02T07:59:54+09:00"
     },
     {
       "date": "2026-07-02",
@@ -78,7 +34,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-07-01T08:02:00+09:00"
+      "updated_at": "2026-07-02T07:59:54+09:00"
     },
     {
       "date": "2026-07-02",
@@ -89,7 +45,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-07-01T08:02:00+09:00"
+      "updated_at": "2026-07-02T07:59:54+09:00"
     },
     {
       "date": "2026-07-02",
@@ -100,7 +56,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-07-01T08:02:00+09:00"
+      "updated_at": "2026-07-02T07:59:54+09:00"
     },
     {
       "date": "2026-07-06",
@@ -111,7 +67,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-07-01T08:02:00+09:00"
+      "updated_at": "2026-07-02T07:59:54+09:00"
     },
     {
       "date": "2026-07-06",
@@ -122,7 +78,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-07-01T08:02:00+09:00"
+      "updated_at": "2026-07-02T07:59:54+09:00"
     },
     {
       "date": "2026-07-06",
@@ -133,7 +89,29 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-07-01T08:02:00+09:00"
+      "updated_at": "2026-07-02T07:59:54+09:00"
+    },
+    {
+      "date": "2026-07-09",
+      "time": "02:00",
+      "name": "10-Year Note Auction",
+      "raw_name": "10-Year Note Auction",
+      "currency": "USD",
+      "country": "United States",
+      "importance": 3,
+      "source": "investing",
+      "updated_at": "2026-07-02T07:59:54+09:00"
+    },
+    {
+      "date": "2026-07-09",
+      "time": "03:00",
+      "name": "금리결정 Meeting Minutes",
+      "raw_name": "FOMC Meeting Minutes",
+      "currency": "USD",
+      "country": "United States",
+      "importance": 3,
+      "source": "investing",
+      "updated_at": "2026-07-02T07:59:54+09:00"
     },
     {
       "date": "2026-07-09",
@@ -144,7 +122,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-07-01T08:02:00+09:00"
+      "updated_at": "2026-07-02T07:59:54+09:00"
     },
     {
       "date": "2026-07-09",
@@ -155,7 +133,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-07-01T08:02:00+09:00"
+      "updated_at": "2026-07-02T07:59:54+09:00"
     },
     {
       "date": "2026-07-14",
@@ -166,7 +144,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-07-01T08:02:00+09:00"
+      "updated_at": "2026-07-02T07:59:54+09:00"
     },
     {
       "date": "2026-07-14",
@@ -177,7 +155,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-07-01T08:02:00+09:00"
+      "updated_at": "2026-07-02T07:59:54+09:00"
     },
     {
       "date": "2026-07-14",
@@ -188,7 +166,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-07-01T08:02:00+09:00"
+      "updated_at": "2026-07-02T07:59:54+09:00"
     },
     {
       "date": "2026-07-15",
@@ -199,7 +177,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-07-01T08:02:00+09:00"
+      "updated_at": "2026-07-02T07:59:54+09:00"
     },
     {
       "date": "2026-07-16",
@@ -210,7 +188,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-07-01T08:02:00+09:00"
+      "updated_at": "2026-07-02T07:59:54+09:00"
     },
     {
       "date": "2026-07-16",
@@ -221,7 +199,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-07-01T08:02:00+09:00"
+      "updated_at": "2026-07-02T07:59:54+09:00"
     },
     {
       "date": "2026-07-16",
@@ -232,7 +210,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-07-01T08:02:00+09:00"
+      "updated_at": "2026-07-02T07:59:54+09:00"
     },
     {
       "date": "2026-07-30",
@@ -243,7 +221,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-07-01T08:02:00+09:00"
+      "updated_at": "2026-07-02T07:59:54+09:00"
     }
   ],
   "error": null
