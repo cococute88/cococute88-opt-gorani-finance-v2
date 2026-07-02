@@ -1,63 +1,8 @@
 {
   "status": "ok",
-  "updated_at": "2026-07-02T07:59:54+09:00",
+  "updated_at": "2026-07-03T07:54:46+09:00",
   "source": "investing",
   "events": [
-    {
-      "date": "2026-07-02",
-      "time": "04:15",
-      "name": "U.S. President Trump Speaks",
-      "raw_name": "U.S. President Trump Speaks",
-      "currency": "USD",
-      "country": "United States",
-      "importance": 3,
-      "source": "investing",
-      "updated_at": "2026-07-02T07:59:54+09:00"
-    },
-    {
-      "date": "2026-07-02",
-      "time": "21:30",
-      "name": "Average Hourly Earnings (MoM)",
-      "raw_name": "Average Hourly Earnings (MoM)",
-      "currency": "USD",
-      "country": "United States",
-      "importance": 3,
-      "source": "investing",
-      "updated_at": "2026-07-02T07:59:54+09:00"
-    },
-    {
-      "date": "2026-07-02",
-      "time": "21:30",
-      "name": "신규 실업수당청구건수",
-      "raw_name": "Initial Jobless Claims",
-      "currency": "USD",
-      "country": "United States",
-      "importance": 3,
-      "source": "investing",
-      "updated_at": "2026-07-02T07:59:54+09:00"
-    },
-    {
-      "date": "2026-07-02",
-      "time": "21:30",
-      "name": "비농업고용지수",
-      "raw_name": "Nonfarm Payrolls",
-      "currency": "USD",
-      "country": "United States",
-      "importance": 3,
-      "source": "investing",
-      "updated_at": "2026-07-02T07:59:54+09:00"
-    },
-    {
-      "date": "2026-07-02",
-      "time": "21:30",
-      "name": "실업률",
-      "raw_name": "Unemployment Rate",
-      "currency": "USD",
-      "country": "United States",
-      "importance": 3,
-      "source": "investing",
-      "updated_at": "2026-07-02T07:59:54+09:00"
-    },
     {
       "date": "2026-07-06",
       "time": "22:45",
@@ -67,7 +12,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-07-02T07:59:54+09:00"
+      "updated_at": "2026-07-03T07:54:46+09:00"
     },
     {
       "date": "2026-07-06",
@@ -78,7 +23,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-07-02T07:59:54+09:00"
+      "updated_at": "2026-07-03T07:54:46+09:00"
     },
     {
       "date": "2026-07-06",
@@ -89,7 +34,18 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-07-02T07:59:54+09:00"
+      "updated_at": "2026-07-03T07:54:46+09:00"
+    },
+    {
+      "date": "2026-07-08",
+      "time": "23:30",
+      "name": "원유재고",
+      "raw_name": "Crude Oil Inventories",
+      "currency": "USD",
+      "country": "United States",
+      "importance": 3,
+      "source": "investing",
+      "updated_at": "2026-07-03T07:54:46+09:00"
     },
     {
       "date": "2026-07-09",
@@ -100,7 +56,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-07-02T07:59:54+09:00"
+      "updated_at": "2026-07-03T07:54:46+09:00"
     },
     {
       "date": "2026-07-09",
@@ -111,7 +67,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-07-02T07:59:54+09:00"
+      "updated_at": "2026-07-03T07:54:46+09:00"
     },
     {
       "date": "2026-07-09",
@@ -122,7 +78,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-07-02T07:59:54+09:00"
+      "updated_at": "2026-07-03T07:54:46+09:00"
     },
     {
       "date": "2026-07-09",
@@ -133,7 +89,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-07-02T07:59:54+09:00"
+      "updated_at": "2026-07-03T07:54:46+09:00"
     },
     {
       "date": "2026-07-14",
@@ -144,7 +100,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-07-02T07:59:54+09:00"
+      "updated_at": "2026-07-03T07:54:46+09:00"
     },
     {
       "date": "2026-07-14",
@@ -155,7 +111,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-07-02T07:59:54+09:00"
+      "updated_at": "2026-07-03T07:54:46+09:00"
     },
     {
       "date": "2026-07-14",
@@ -166,7 +122,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-07-02T07:59:54+09:00"
+      "updated_at": "2026-07-03T07:54:46+09:00"
     },
     {
       "date": "2026-07-15",
@@ -177,7 +133,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-07-02T07:59:54+09:00"
+      "updated_at": "2026-07-03T07:54:46+09:00"
     },
     {
       "date": "2026-07-16",
@@ -188,7 +144,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-07-02T07:59:54+09:00"
+      "updated_at": "2026-07-03T07:54:46+09:00"
     },
     {
       "date": "2026-07-16",
@@ -199,7 +155,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-07-02T07:59:54+09:00"
+      "updated_at": "2026-07-03T07:54:46+09:00"
     },
     {
       "date": "2026-07-16",
@@ -210,7 +166,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-07-02T07:59:54+09:00"
+      "updated_at": "2026-07-03T07:54:46+09:00"
     },
     {
       "date": "2026-07-30",
@@ -221,7 +177,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-07-02T07:59:54+09:00"
+      "updated_at": "2026-07-03T07:54:46+09:00"
     }
   ],
   "error": null
