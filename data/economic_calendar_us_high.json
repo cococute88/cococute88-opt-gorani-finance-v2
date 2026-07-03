@@ -1,6 +1,6 @@
 {
   "status": "ok",
-  "updated_at": "2026-07-03T07:54:46+09:00",
+  "updated_at": "2026-07-04T07:52:29+09:00",
   "source": "investing",
   "events": [
     {
@@ -12,7 +12,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-07-03T07:54:46+09:00"
+      "updated_at": "2026-07-04T07:52:29+09:00"
     },
     {
       "date": "2026-07-06",
@@ -23,7 +23,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-07-03T07:54:46+09:00"
+      "updated_at": "2026-07-04T07:52:29+09:00"
     },
     {
       "date": "2026-07-06",
@@ -34,7 +34,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-07-03T07:54:46+09:00"
+      "updated_at": "2026-07-04T07:52:29+09:00"
     },
     {
       "date": "2026-07-08",
@@ -45,7 +45,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-07-03T07:54:46+09:00"
+      "updated_at": "2026-07-04T07:52:29+09:00"
     },
     {
       "date": "2026-07-09",
@@ -56,7 +56,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-07-03T07:54:46+09:00"
+      "updated_at": "2026-07-04T07:52:29+09:00"
     },
     {
       "date": "2026-07-09",
@@ -67,7 +67,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-07-03T07:54:46+09:00"
+      "updated_at": "2026-07-04T07:52:29+09:00"
     },
     {
       "date": "2026-07-09",
@@ -78,7 +78,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-07-03T07:54:46+09:00"
+      "updated_at": "2026-07-04T07:52:29+09:00"
     },
     {
       "date": "2026-07-09",
@@ -89,7 +89,18 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-07-03T07:54:46+09:00"
+      "updated_at": "2026-07-04T07:52:29+09:00"
+    },
+    {
+      "date": "2026-07-10",
+      "time": "02:01",
+      "name": "30-Year Bond Auction",
+      "raw_name": "30-Year Bond Auction",
+      "currency": "USD",
+      "country": "United States",
+      "importance": 3,
+      "source": "investing",
+      "updated_at": "2026-07-04T07:52:29+09:00"
     },
     {
       "date": "2026-07-14",
@@ -100,7 +111,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-07-03T07:54:46+09:00"
+      "updated_at": "2026-07-04T07:52:29+09:00"
     },
     {
       "date": "2026-07-14",
@@ -111,7 +122,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-07-03T07:54:46+09:00"
+      "updated_at": "2026-07-04T07:52:29+09:00"
     },
     {
       "date": "2026-07-14",
@@ -122,7 +133,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-07-03T07:54:46+09:00"
+      "updated_at": "2026-07-04T07:52:29+09:00"
     },
     {
       "date": "2026-07-15",
@@ -133,7 +144,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-07-03T07:54:46+09:00"
+      "updated_at": "2026-07-04T07:52:29+09:00"
     },
     {
       "date": "2026-07-16",
@@ -144,7 +155,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-07-03T07:54:46+09:00"
+      "updated_at": "2026-07-04T07:52:29+09:00"
     },
     {
       "date": "2026-07-16",
@@ -155,7 +166,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-07-03T07:54:46+09:00"
+      "updated_at": "2026-07-04T07:52:29+09:00"
     },
     {
       "date": "2026-07-16",
@@ -166,7 +177,40 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-07-03T07:54:46+09:00"
+      "updated_at": "2026-07-04T07:52:29+09:00"
+    },
+    {
+      "date": "2026-07-24",
+      "time": "22:45",
+      "name": "S&P Global Manufacturing PMI",
+      "raw_name": "S&P Global Manufacturing PMI",
+      "currency": "USD",
+      "country": "United States",
+      "importance": 3,
+      "source": "investing",
+      "updated_at": "2026-07-04T07:52:29+09:00"
+    },
+    {
+      "date": "2026-07-24",
+      "time": "22:45",
+      "name": "S&P Global Services PMI",
+      "raw_name": "S&P Global Services PMI",
+      "currency": "USD",
+      "country": "United States",
+      "importance": 3,
+      "source": "investing",
+      "updated_at": "2026-07-04T07:52:29+09:00"
+    },
+    {
+      "date": "2026-07-24",
+      "time": "23:00",
+      "name": "신규주택판매",
+      "raw_name": "New Home Sales",
+      "currency": "USD",
+      "country": "United States",
+      "importance": 3,
+      "source": "investing",
+      "updated_at": "2026-07-04T07:52:29+09:00"
     },
     {
       "date": "2026-07-30",
@@ -177,7 +221,7 @@
       "country": "United States",
       "importance": 3,
       "source": "investing",
-      "updated_at": "2026-07-03T07:54:46+09:00"
+      "updated_at": "2026-07-04T07:52:29+09:00"
     }
   ],
   "error": null
